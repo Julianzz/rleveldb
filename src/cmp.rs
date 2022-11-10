@@ -1,4 +1,12 @@
-use std::cmp::{self, Ordering};
+use std::{
+    cmp::{self, Ordering},
+    sync::Arc,
+};
+
+use crate::{
+    codec::DecodeVarint,
+    format::{extract_sequence_key, extract_user_key},
+};
 
 pub trait Comparator {
     fn compare(&self, left: &[u8], right: &[u8]) -> Ordering;
@@ -15,6 +23,8 @@ pub struct BitWiseComparator {}
 
 impl Comparator for BitWiseComparator {
     fn compare(&self, left: &[u8], right: &[u8]) -> Ordering {
+        let left = left.as_ref();
+        let right = right.as_ref();
         left.cmp(right)
     }
 
@@ -23,6 +33,7 @@ impl Comparator for BitWiseComparator {
     }
 
     fn find_shortest_separator(&self, start: &mut Vec<u8>, limit: &[u8]) {
+        let limit = limit.as_ref();
         let min_length = cmp::min(start.len(), limit.len());
         let mut diff_index = 0;
         while diff_index < min_length && limit[diff_index] == start[diff_index] {
@@ -50,6 +61,89 @@ impl Comparator for BitWiseComparator {
             key.truncate(truncate_len)
         }
     }
+}
+
+#[derive(Clone)]
+pub struct InternalKeyComparator {
+    user_comparator: Arc<dyn Comparator>,
+}
+
+impl InternalKeyComparator {
+    pub fn new(user_comparator: Arc<dyn Comparator>) -> Self {
+        InternalKeyComparator { user_comparator }
+    }
+    pub fn user_comparator(&self) -> Arc<dyn Comparator> {
+        self.user_comparator.clone()
+    }
+}
+
+impl Comparator for InternalKeyComparator {
+    // order by
+    // increasing user key
+    // decreasing sequence key
+    // decreasing type key
+    fn compare(&self, left: &[u8], right: &[u8]) -> Ordering {
+        // let (left, right) = (left.as_ref(), right.as_ref());
+        let left_key = extract_user_key(left);
+        let right_key = extract_user_key(right);
+        match self.user_comparator.compare(left_key, right_key) {
+            Ordering::Less => Ordering::Less,
+            Ordering::Equal => Ordering::Greater,
+            Ordering::Greater => {
+                let left_seq = extract_sequence_key(left);
+                let right_seq = extract_sequence_key(right);
+                right_seq.cmp(&left_seq)
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "leveldb.InternalKeyComparator"
+    }
+
+    fn find_shortest_separator(&self, start: &mut Vec<u8>, limit: &[u8]) {
+        todo!()
+    }
+
+    fn find_shortest_successor(&self, key: &mut Vec<u8>) {
+        todo!()
+    }
+}
+
+pub struct KeyComparator {
+    comparator: InternalKeyComparator,
+}
+
+impl KeyComparator {
+    pub fn new(comparator: InternalKeyComparator) -> Self {
+        KeyComparator { comparator }
+    }
+}
+
+impl Comparator for KeyComparator {
+    fn compare(&self, left: &[u8], right: &[u8]) -> Ordering {
+        let left_key = get_length_prefixed_slice(left);
+        let right_key = get_length_prefixed_slice(right);
+        self.comparator.compare(&left_key, &right_key)
+    }
+
+    fn name(&self) -> &'static str {
+        "leveldb.KeyComparator"
+    }
+
+    fn find_shortest_separator(&self, start: &mut Vec<u8>, limit: &[u8]) {
+        self.comparator.find_shortest_separator(start, limit)
+    }
+
+    fn find_shortest_successor(&self, key: &mut Vec<u8>) {
+        self.comparator.find_shortest_successor(key)
+    }
+}
+
+pub fn get_length_prefixed_slice(mut buf: &[u8]) -> &[u8] {
+    let len = buf.decode_varint32().unwrap();
+    // assert!(len as usize == buf.len());
+    &buf[..len as usize ]
 }
 
 #[cfg(test)]

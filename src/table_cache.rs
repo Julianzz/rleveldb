@@ -10,7 +10,8 @@ use crate::{
     table::table::Table,
 };
 
-pub struct TableCache<E: Env> {
+#[derive(Clone)]
+pub struct TableCache<E> {
     env: E,
     dbname: String,
     options: Arc<Options>,

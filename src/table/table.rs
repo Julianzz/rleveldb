@@ -7,14 +7,14 @@ use crate::{
     codec::NumberEncoder,
     env::{RandomAccessFile, WritableFile},
     error::{Error, Result},
-    iterator::DBItertor,
+    iterator::DBIterator,
     options::{Compress, Options, ReadOption},
 };
 
 use super::{
     block::{Block, BlockIter},
     block_builder::BlockBuilder,
-    filter_block::{FilterBlockBuilder},
+    filter_block::FilterBlockBuilder,
     format::{BlockContent, BlockHandle, Footer, BLOCK_TRAILER_SIZE, FULL_FOOTER_LENGTH},
     two_level_iterator::{BlockIterBuilder, TwoLevelIterator},
 };
@@ -129,13 +129,16 @@ impl<R: RandomAccessFile> Table<R> {
             let value = index_iter.value();
 
             let block_handle = BlockHandle::from_raw(value).unwrap();
-            eprintln!("{}  -> {} {}", String::from_utf8_lossy(key), block_handle.offset(), block_handle.size());
-            
+            eprintln!(
+                "{}  -> {} {}",
+                String::from_utf8_lossy(key),
+                block_handle.offset(),
+                block_handle.size()
+            );
+
             index_iter.next();
         }
-
     }
-
 }
 
 pub(crate) struct TableBlockIterBuilder<R: RandomAccessFile> {
@@ -208,7 +211,7 @@ impl<W: WritableFile> TableBuiler<W> {
             self.options
                 .comparator
                 .find_shortest_separator(&mut self.last_key, key);
-            let mut handle_encoding = vec![0;16];
+            let mut handle_encoding = vec![0; 16];
             self.pending_handle.encode(&mut handle_encoding);
             self.index_block
                 .as_mut()
@@ -251,7 +254,7 @@ impl<W: WritableFile> TableBuiler<W> {
             &mut self.file,
             data_block,
             &mut self.pending_handle,
-            self.options.compress_type,
+            self.options.compression_type,
             &mut self.compress_out,
             self.offset,
         )?;
@@ -266,7 +269,7 @@ impl<W: WritableFile> TableBuiler<W> {
         Ok(())
     }
 
-    pub fn finish(mut self, sync: bool) -> Result<()> {
+    pub fn finish(mut self, sync: bool) -> Result<u64> {
         self.flush()?;
 
         let mut meta_index_block = BlockBuilder::new(
@@ -280,7 +283,7 @@ impl<W: WritableFile> TableBuiler<W> {
             self.offset = write_raw_block(
                 &mut self.file,
                 &block_content,
-                self.options.compress_type,
+                self.options.compression_type,
                 &mut filter_block_handle,
                 self.offset,
             )?;
@@ -297,7 +300,7 @@ impl<W: WritableFile> TableBuiler<W> {
             &mut self.file,
             meta_index_block,
             &mut meta_index_block_handle,
-            self.options.compress_type,
+            self.options.compression_type,
             &mut self.compress_out,
             self.offset,
         )?;
@@ -317,7 +320,7 @@ impl<W: WritableFile> TableBuiler<W> {
             &mut self.file,
             index_block,
             &mut index_block_handle,
-            self.options.compress_type,
+            self.options.compression_type,
             &mut self.compress_out,
             self.offset,
         )?;
@@ -333,7 +336,7 @@ impl<W: WritableFile> TableBuiler<W> {
             self.file.sync();
         }
 
-        Ok(())
+        Ok(self.offset)
     }
 }
 
@@ -396,9 +399,7 @@ fn write_raw_block<W: WritableFile>(
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use crate::{
-        cmp::BitWiseComparator, env::RandomAccessFile, filter::BloomFilterPolicy,
-    };
+    use crate::{cmp::BitWiseComparator, env::RandomAccessFile, filter::BloomFilterPolicy};
 
     use super::*;
     pub struct MemFs {
@@ -457,7 +458,8 @@ mod tests {
             filter_policy: Some(Arc::new(BloomFilterPolicy::new(3))),
             block_restart_interval: 3,
             block_size: 1024,
-            compress_type: Compress::NO,
+            compression_type: Compress::NO,
+            ..Default::default()
         });
 
         let mut table_builder = TableBuiler::new(options.clone(), file);
@@ -488,7 +490,7 @@ mod tests {
             }
 
             let (origin_key, origin_value) = data_iter.next().unwrap();
-            
+
             assert_eq!(String::from_utf8_lossy(iter.key()), *origin_key);
             assert_eq!(String::from_utf8_lossy(iter.value()), *origin_value);
 

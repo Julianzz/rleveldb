@@ -4,7 +4,7 @@ use crate::error::Result;
 use std::os::unix::fs::FileExt;
 use std::{
     fs::{self, File},
-    io::{Write, Read},
+    io::{Read, Write},
     path::Path,
 };
 
@@ -39,6 +39,9 @@ impl WritableFile for PosixFile {
 impl SequencialFile for PosixFile {
     fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
         self.0.read_exact(buf).map_err(From::from)
+    }
+    fn read_all(&mut self, buf: &mut String) -> Result<()> {
+        self.0.read_to_string(buf).map(|_| ()).map_err(From::from)
     }
 
     fn skip(&mut self, n: usize) -> Result<()> {
@@ -75,5 +78,31 @@ impl Env for PosixEnv {
     fn new_sequential_file(&self, path: &Path) -> Result<Self::SequencialFile> {
         let file = fs::OpenOptions::new().read(true).write(false).open(path)?;
         Ok(PosixFile(file))
+    }
+
+    fn delete_file(&self, path: &Path) -> Result<()> {
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    fn create_dir(&self, path: &Path) -> Result<()> {
+        fs::create_dir(path).map_err(From::from)
+    }
+
+    fn file_exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+
+    fn rename_file(&self, from: &Path, to: &Path) -> Result<()> {
+        fs::rename(from, to).map_err(From::from)
+    }
+
+    fn get_children(&self, path: &Path, files: &mut Vec<String>) -> Result<()> {
+        for file in fs::read_dir(path)? {
+            if file.is_ok() {
+                files.push(file.unwrap().file_name().into_string().unwrap())
+            }
+        }
+        Ok(())
     }
 }

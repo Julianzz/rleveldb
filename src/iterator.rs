@@ -1,6 +1,6 @@
 use crate::error::Result;
 
-pub trait DBItertor {
+pub trait DBIterator {
     fn valid(&self) -> bool;
 
     fn seek_to_first(&mut self);

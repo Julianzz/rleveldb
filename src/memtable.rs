@@ -1,32 +1,44 @@
-use std::{io::Write, sync::Arc};
+use std::{
+    cmp::Ordering,
+    io::Write,
+    rc::Rc,
+    sync::{
+        atomic::{self, AtomicUsize},
+        Arc,
+    },
+};
 
 use crate::{
-    cmp::Comparator,
-    skipmap::SkipMap,
+    cmp::{Comparator, InternalKeyComparator, KeyComparator},
+    codec::{decode_var_u32, put_varint32, NumberDecoder, VarDecoder},
+    error::{Error, Result},
+    iterator::DBIterator,
+    skiplist::{SkipList, SkipListIter},
     types::{SequenceNumber, ValueType},
+    utils::buffer::BufferReader,
 };
 
 use integer_encoding::{FixedIntWriter, VarInt, VarIntWriter};
 
 pub struct MemTable {
-    table: SkipMap,
+    table: Arc<SkipList<Vec<u8>>>,
+    comparator: Arc<dyn Comparator>,
+    memory_usage: AtomicUsize,
 }
 
 impl MemTable {
-    pub fn new(_: Arc<dyn Comparator>) -> MemTable {
+    pub fn new(internal_comparator: InternalKeyComparator) -> MemTable {
+        let comparator = internal_comparator.user_comparator();
+        let key_comparator = KeyComparator::new(internal_comparator);
+
         MemTable {
-            table: SkipMap::new(),
+            table: Arc::new(SkipList::new(Rc::new(key_comparator))),
+            comparator,
+            memory_usage: AtomicUsize::new(0),
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.table.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.table.len() == 0
-    }
-
-    pub fn add<T: AsRef<[u8]>>(&mut self, seq: SequenceNumber, t: ValueType, key: T, value: T) {
+    pub fn add<T: AsRef<[u8]>>(&self, seq: SequenceNumber, t: ValueType, key: T, value: T) {
         // Format of an entry is concatenation of:
         //  key_size     : varint32 of internal_key.size()
         //  key bytes    : char[internal_key.size()]
@@ -48,43 +60,120 @@ impl MemTable {
         buf.write_varint(value_size).unwrap();
         buf.write_all(value).unwrap();
 
+        self.memory_usage
+            .fetch_add(buf.len(), atomic::Ordering::Relaxed);
+
         assert_eq!(buf.len(), size);
 
-        self.table.insert(buf, Vec::new());
+        self.table.insert(buf);
     }
 
-    // pub fn get(&self, search_key: LookupKey) -> (Option<Vec<u8>>, bool) {
-    //     let mut iter = self.table.iter();
-    //     iter.seek(search_key.memtable_key());
+    pub fn get(&self, search_key: LookupKey) -> Result<Option<Vec<u8>>> {
+        let mut iter = SkipListIter::new(self.table.clone());
+        iter.seek(search_key.memtable_key());
 
-    //     let (mut key, mut value) = (vec![], vec![]);
-    //     if iter.current(&mut key, &mut value) {
-    //         let (key_len, mut i) = usize::decode_var(key.as_slice()).unwrap();
-    //         let key_offset = i;
-    //         i += key_len - 8;
+        if iter.valid() {
+            let mut seek_key = iter.key();
 
-    //         let (rkeylen, rkeyoff, tag, _, _) = if key.len() > i {
-    //             let tag = usize::decode_fixed(&key[i..i + 8]);
-    //             i += 8;
-    //             let (val_len, j) = usize::decode_var(&key[i..]).unwrap();
-    //             i += j;
+            let internal_key_len = seek_key.decode_var_u32().unwrap();
+            let mut internal_key = seek_key.read_bytes(internal_key_len as usize).unwrap();
+            let seek_user_key = internal_key.read_bytes(internal_key.len() - 8).unwrap();
+            if self
+                .comparator
+                .compare(search_key.user_key(), seek_user_key)
+                == Ordering::Equal
+            {
+                let record_type = internal_key.decode_u64_le().unwrap() & 0xff;
+                if record_type == ValueType::Value as u64 {
+                    let value_len = seek_key.decode_var_u32().unwrap();
+                    let user_value = seek_key.read_bytes(value_len as usize).unwrap();
+                    return Ok(Some(user_value.into()));
+                } else if record_type == ValueType::Deletetion as u64 {
+                    return Ok(None);
+                }
+            }
+        }
+        Err(Error::NotFoundError("no key".into()))
+    }
 
-    //             let val_offset = i;
-    //             (key_len - 8, key_offset, tag, val_len, val_offset)
-    //         } else {
-    //             (key_len - 8, key_offset, 0, 0, 0)
-    //         };
-    //         let found_key = &key[rkeyoff..rkeyoff + rkeylen];
-    //         if search_key.user_key().cmp(found_key) == Ordering::Equal {
-    //             if tag & 0xff == ValueType::Value as usize {
-    //                 return (Some(found_key.to_owned()), false);
-    //             } else {
-    //                 return (None, true);
-    //             }
-    //         }
-    //     }
-    //     (None, false)
-    // }
+    pub fn approximate_memory_usage(&self) -> usize {
+        self.memory_usage.load(atomic::Ordering::Relaxed)
+    }
+
+    pub fn iter(&self) -> Box<dyn DBIterator> {
+        Box::new(MemTableIterator::new(SkipListIter::new(self.table.clone())))
+    }
+}
+
+pub struct MemTableIterator {
+    iter: SkipListIter<Vec<u8>>,
+    tmp: Vec<u8>,
+}
+
+impl MemTableIterator {
+    pub fn new(iter: SkipListIter<Vec<u8>>) -> Self {
+        MemTableIterator {
+            iter: iter,
+            tmp: Vec::new(),
+        }
+    }
+}
+
+impl DBIterator for MemTableIterator {
+    fn valid(&self) -> bool {
+        self.iter.valid()
+    }
+
+    fn seek_to_first(&mut self) {
+        self.iter.seek_to_first();
+    }
+
+    fn seek_to_last(&mut self) {
+        self.iter.seek_to_last();
+    }
+
+    fn seek(&mut self, target: &[u8]) {
+        self.tmp.clear();
+        encode_key(&mut self.tmp, target);
+
+        self.iter.seek(&self.tmp);
+    }
+
+    fn next(&mut self) {
+        self.iter.next();
+    }
+
+    fn prev(&mut self) {
+        self.iter.prev();
+    }
+
+    fn key(&self) -> &[u8] {
+        let raw = self.iter.key();
+        let (result, _) = get_length_prefixed_slice(raw);
+        result
+    }
+
+    fn value(&self) -> &[u8] {
+        let raw = self.iter.key();
+        let (_, offset) = get_length_prefixed_slice(raw);
+        let (result, _) = get_length_prefixed_slice(&raw[offset..]);
+        result
+    }
+
+    fn status(&mut self) -> Result<()> {
+        todo!()
+    }
+}
+
+pub fn get_length_prefixed_slice<'a>(buf: &'a [u8]) -> (&'a [u8], usize) {
+    let (len, offset) = decode_var_u32(buf).unwrap();
+    (&buf[offset..offset + len as usize], offset + len as usize)
+}
+
+fn encode_key(scratch: &mut Vec<u8>, target: &[u8]) {
+    // scratch.clear();
+    put_varint32(scratch, target.len() as u32);
+    scratch.extend_from_slice(target);
 }
 
 pub struct LookupKey {
@@ -121,24 +210,37 @@ impl LookupKey {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
+    use crate::cmp::BitWiseComparator;
 
-//     #[test]
-//     fn test_memtable() {
-//         let mut table = MemTable::new();
-//         let datas = &[("liuzhenzhong", 1u64, ValueType::Value)];
+    use super::*;
 
-//         for (key, seq, typ) in datas {
-//             table.add(*seq, *typ, *key, "")
-//         }
+    #[test]
+    fn test_memtable() {
+        let user_comparator = BitWiseComparator {};
+        let comparator = InternalKeyComparator::new(Arc::new(user_comparator));
+        let mut table = MemTable::new(comparator);
+        let datas = &[
+            ("liuzhenzhong", 1u64, ValueType::Value, "zhong"),
+            ("liuzhong", 2u64, ValueType::Value, "time"),
+            ("time", 1u64, ValueType::Deletetion, ""),
+        ];
 
-//         for (key, seq, typ) in datas {
-//             let lookup_key = LookupKey::new(*key, *seq, *typ);
-//             let (val, found) = table.get(lookup_key);
-//             assert!(!found, "delete key");
-//             assert_eq!(val.unwrap().as_slice(), key.as_bytes());
-//         }
-//     }
-// }
+        for (key, seq, typ, val) in datas {
+            table.add(*seq, *typ, *key, val)
+        }
+
+        for &(key, seq, typ, val) in datas {
+            let lookup_key = LookupKey::new(key, seq, typ);
+            let result = table.get(lookup_key);
+            if typ == ValueType::Value {
+                assert!(result.is_ok(), "delete key");
+                assert_eq!(result.unwrap().unwrap().as_slice(), val.as_bytes());
+            } else {
+                assert!(result.is_ok(), "delete key");
+                assert!(result.unwrap().is_none());
+            }
+        }
+    }
+}

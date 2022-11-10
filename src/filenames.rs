@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use crate::error::{Error, Result};
+use crate::{
+    env::{write_string_to_file_sync, Env},
+    error::{Error, Result},
+};
 
 pub type FileNum = u64;
 
@@ -12,6 +15,7 @@ pub struct FileMeta {
 const CURRENT: &str = "CURRENT";
 const LOCK: &str = "LOCK";
 
+#[derive(PartialEq, Copy, Clone)]
 pub enum FileType {
     Log,
     DBLock,
@@ -92,4 +96,18 @@ pub fn info_log_file_name<P: AsRef<Path>>(name: P) -> PathBuf {
 
 pub fn old_info_log_file_name<P: AsRef<Path>>(name: P) -> PathBuf {
     name.as_ref().join("LOG.old")
+}
+
+pub fn set_current_file<E: Env>(env: E, db_name: &String, descriptor_num: u64) -> Result<()> {
+    let manifest = descriptor_file_name(db_name, descriptor_num);
+    let mut content = manifest.to_str().unwrap()[db_name.len() + 1..].to_owned();
+    content.push('\n');
+    let tmp = temp_file_name(db_name, descriptor_num);
+
+    let res = write_string_to_file_sync(env.clone(), content.as_bytes(), &tmp);
+    if res.is_ok() {
+        env.rename_file(&tmp, &current_file_name(db_name))
+    } else {
+        env.delete_file(&tmp)
+    }
 }

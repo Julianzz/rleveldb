@@ -1,5 +1,6 @@
-use std::{io, result};
+use std::{io, result, string::FromUtf8Error};
 
+use crossbeam::channel::RecvError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -19,6 +20,23 @@ pub enum Error {
         #[from]
         source: io::Error,
         // backtrace: Backtrace,
+    },
+
+    #[error("error in receive from channel")]
+    ReceiveError {
+        #[from]
+        source: RecvError,
+    },
+    #[error("not find")]
+    NotFoundError(String),
+
+    #[error("custom error")]
+    CustomError(String),
+
+    #[error("utf8-error")]
+    FromUtf8Error {
+        #[from]
+        source: FromUtf8Error,
     },
 }
 

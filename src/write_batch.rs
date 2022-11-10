@@ -1,14 +1,14 @@
-use std::fmt::Write;
+use std::{fmt::Write, sync::Arc};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use bytes::Buf;
 use integer_encoding::VarIntWriter;
 
 use crate::{
-    codec::{decode_value, decode_var_u32, BufferReader, NumberDecoder, NumberEncoder},
+    codec::{decode_value, NumberDecoder},
     error::{Error, Result},
     types::SequenceNumber,
-    ValueType,
+    MemTable, ValueType,
 };
 
 const HEAD_SIZE: usize = 12;
@@ -22,7 +22,7 @@ impl WriteBatch {
             rep: vec![0; HEAD_SIZE],
         }
     }
-
+    
     pub fn set_sequence(&mut self, seq: SequenceNumber) {
         self.rep
             .as_mut_slice()
@@ -78,8 +78,15 @@ impl WriteBatch {
         buf.decode_u64_le().unwrap()
     }
 
+    pub fn mut_content(&mut self) -> &mut Vec<u8> {
+        &mut self.rep
+    }
     pub fn content(&self) -> &Vec<u8> {
         &self.rep
+    }
+    pub fn set_content(&mut self, content: Vec<u8>) {
+        self.rep = content;
+        // self.rep.extend_from_slice(&content);
     }
 
     pub fn iterate<H: Handler>(&self, mut handler: H) -> Result<()> {
@@ -92,7 +99,7 @@ impl WriteBatch {
         buf.advance(HEAD_SIZE);
         let mut found = 0;
         let mut offset = 0;
-        while !buf.is_empty() {
+        while offset < buf.len() {
             let tag = ValueType::try_from(buf[offset])?;
             offset += 1;
             found += 1;
@@ -118,9 +125,34 @@ impl WriteBatch {
 
         Ok(())
     }
+
+    pub fn insert_into(&self, mem: Arc<MemTable>) -> Result<()> {
+        let inserter = MemtableInserter {
+            sequence: self.sequence(),
+            mem: mem,
+        };
+        self.iterate(inserter)
+    }
 }
 
 pub trait Handler {
     fn put(&mut self, key: &[u8], value: &[u8]);
     fn delete(&mut self, key: &[u8]);
+}
+
+pub struct MemtableInserter {
+    sequence: SequenceNumber,
+    mem: Arc<MemTable>,
+}
+
+impl Handler for MemtableInserter {
+    fn put(&mut self, key: &[u8], value: &[u8]) {
+        self.mem.add(self.sequence, ValueType::Value, key, value);
+        self.sequence += 1;
+    }
+
+    fn delete(&mut self, key: &[u8]) {
+        self.mem.add(self.sequence, ValueType::Deletetion, key, &[]);
+        self.sequence += 1;
+    }
 }

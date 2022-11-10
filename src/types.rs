@@ -10,7 +10,7 @@ pub fn shared<T>(t: T) -> Rc<RefCell<T>> {
     Rc::new(RefCell::new(t))
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone,PartialEq)]
 pub enum ValueType {
     Deletetion = 0,
     Value = 1,

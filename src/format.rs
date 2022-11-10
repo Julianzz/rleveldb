@@ -1,11 +1,10 @@
-use byteorder::WriteBytesExt;
-
 use crate::{
     codec::{NumberDecoder, NumberEncoder},
     types::{SequenceNumber, MAX_SEQUENCE_NUMBER},
     ValueType,
 };
 
+#[derive(Default, Clone)]
 pub struct InternalKey {
     rep: Vec<u8>,
 }
@@ -34,6 +33,13 @@ impl InternalKey {
         assert!(self.rep.len() > 8);
         &self.rep[..(self.rep.len() - 8)]
     }
+    pub fn encode(&self) -> &[u8] {
+        self.rep.as_slice()
+    }
+    pub fn decode(&mut self, s: &[u8]) -> bool {
+        self.rep = Vec::from(s);
+        !self.rep.is_empty()
+    }
 }
 
 pub fn pack_sequence_and_type(seq: u64, t: ValueType) -> u64 {
@@ -51,22 +57,36 @@ impl<'a> ParsedInternalKey<'a> {
         result.extend_from_slice(self.user_key);
         let mut buf = [0u8; 8];
         buf.as_mut()
-            .encode_u64_le(pack_sequence_and_type(self.sequence, self.val_type));
+            .encode_u64_le(pack_sequence_and_type(self.sequence, self.val_type))
+            .unwrap();
         result.extend_from_slice(&buf);
     }
 
     pub fn parse(data: &'a [u8]) -> Self {
         assert!(data.len() >= 8);
-        let key = &data[0..data.len() - 8];
+        let user_key = &data[0..data.len() - 8];
         let mut buf = data;
         let tag = buf.decode_u64_le().unwrap();
-        let seq = tag >> 8;
+        let sequence = tag >> 8;
         let val_type = ValueType::try_from((tag & 0xff) as u8).unwrap();
 
         ParsedInternalKey {
-            user_key: key,
-            sequence: seq,
-            val_type: val_type,
+            user_key,
+            sequence,
+            val_type,
         }
     }
+}
+
+pub fn extract_user_key(internal_key: &[u8]) -> &[u8] {
+    let internal_key = internal_key.as_ref();
+    assert!(internal_key.len() >= 8);
+    &internal_key[..internal_key.len() - 8]
+}
+
+pub fn extract_sequence_key<T: AsRef<[u8]>>(internal_key: T) -> u64 {
+    let internal_key = internal_key.as_ref();
+    assert!(internal_key.len() >= 8);
+    let mut buf = &internal_key[internal_key.len() - 8..];
+    buf.decode_u64_le().unwrap()
 }

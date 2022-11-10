@@ -1,15 +1,17 @@
 #![feature(error_generic_member_access)]
 
-use std::{str};
+use std::str;
 
-use rleveldb::{LogReader, LogWriter, MemTable, ValueType, LookupKey};
+use rleveldb::{LogReader, LogWriter, LookupKey, MemTable, ValueType};
 fn main() {
     let datas = &[
         "liu",
         "zhenzhong",
         "guojia",
-        str::from_utf8(&[b'a' ; 32 * 1024*2+20]).unwrap(),
+        str::from_utf8(&[b'a'; 32 * 1024 * 2 + 20]).unwrap(),
     ];
+    println!("hello");
+    
     // let mut v = Vec::new();
     // let mut writer = LogWriter::new(&mut v);
     // for data in datas {
@@ -37,6 +39,4 @@ fn main() {
     //     let lkey = LookupKey::new(*data,0u64, ValueType::Value);
     //     table.get(lkey);
     // }
-
-
 }

@@ -5,7 +5,7 @@ use std::{
 
 use crate::error::Result;
 
-use super::{Env, RandomAccessFile, WritableFile, SequencialFile};
+use super::{Env, RandomAccessFile, SequencialFile, WritableFile};
 
 pub struct MemFs {
     data: Vec<u8>,
@@ -61,6 +61,10 @@ impl SequencialFile for MemFs {
     fn skip(&mut self, n: usize) -> Result<()> {
         todo!()
     }
+
+    fn read_all(&mut self, buf: &mut String) -> Result<()> {
+        todo!()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -85,7 +89,27 @@ impl Env for MemEnv {
         todo!()
     }
 
-    fn new_sequential_file(&self, name:&Path) -> Result<Self::SequencialFile> {
+    fn new_sequential_file(&self, name: &Path) -> Result<Self::SequencialFile> {
+        todo!()
+    }
+
+    fn delete_file(&self, path: &Path) -> Result<()> {
+        todo!()
+    }
+
+    fn create_dir(&self, path: &Path) -> Result<()> {
+        todo!()
+    }
+
+    fn file_exists(&self, path: &Path) -> bool {
+        todo!()
+    }
+
+    fn rename_file(&self,from:&Path, to:&Path)-> Result<()> {
+        todo!()
+    }
+
+    fn get_children(&self, path: &Path, files: &mut Vec<String>)-> Result<()> {
         todo!()
     }
 }

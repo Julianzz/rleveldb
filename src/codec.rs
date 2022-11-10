@@ -1,3 +1,4 @@
+use crate::utils::buffer::{BufferReader, BufferWriter};
 use std::io::{self, Read, Write};
 
 use crate::error::{Error, Result};
@@ -72,6 +73,48 @@ pub trait NumberDecoder: Read {
 }
 
 impl<T> NumberDecoder for T where T: Read {}
+
+pub trait EncodeVarint {
+    fn encode_varint32(&mut self, v: u32) -> Result<()>;
+    fn encode_varint64(&mut self, v: u64) -> Result<()>;
+}
+
+impl EncodeVarint for &mut [u8] {
+    fn encode_varint32(&mut self, v: u32) -> Result<()> {
+        if v < (1 << 7) {
+            self.write_u8(v as u8)?;
+        } else if v < (1 << 14) {
+            self.write_u8((v | B) as u8)?;
+            self.write_u8((v >> 7) as u8)?;
+        } else if v < (1 << 21) {
+            self.write_u8((v | B) as u8)?;
+            self.write_u8(((v >> 7) | B) as u8)?;
+            self.write_u8((v >> 14) as u8)?;
+        } else if v < (1 << 28) {
+            self.write_u8((v | B) as u8)?;
+            self.write_u8(((v >> 7) | B) as u8)?;
+            self.write_u8(((v >> 14) | B) as u8)?;
+            self.write_u8((v >> 21) as u8)?;
+        } else {
+            self.write_u8((v | B) as u8)?;
+            self.write_u8(((v >> 7) | B) as u8)?;
+            self.write_u8(((v >> 14) | B) as u8)?;
+            self.write_u8(((v >> 21) | B) as u8)?;
+            self.write_u8((v >> 28) as u8)?;
+        }
+        Ok(())
+    }
+
+    fn encode_varint64(&mut self, mut v: u64) -> Result<()> {
+        while v >= u64::from(B) {
+            let n = (v | u64::from(B)) & 0xFF;
+            self.write_u8(n as u8).unwrap();
+            v >>= 7;
+        }
+        self.write_u8(v as u8)?;
+        Ok(())
+    }
+}
 
 pub trait VarDecoder {
     fn decode_var_u32(&mut self) -> Result<u32>;
@@ -176,7 +219,7 @@ pub fn decode_value(buf: &[u8]) -> Result<(&[u8], usize)> {
     let mut offset = 0;
     let (key_size, key_offset) = decode_var_u32(&buf[offset..])?;
     offset += key_offset;
-    if offset + key_size as usize >= buf.len() {
+    if offset + key_size as usize > buf.len() {
         return Err(Error::Corruption("bad var key lenngth".into()));
     }
     let key = &buf[offset..offset + key_size as usize];
@@ -184,16 +227,114 @@ pub fn decode_value(buf: &[u8]) -> Result<(&[u8], usize)> {
     Ok((key, offset))
 }
 
-pub trait BufferReader {
-    fn read_bytes(&self, count: usize) -> Result<(&[u8], &[u8])>;
+// pub trait BufferReader {
+//     fn read_bytes(&self, count: usize) -> Result<(&[u8], &[u8])>;
+// }
+
+// impl BufferReader for &[u8] {
+//     fn read_bytes(&self, count: usize) -> Result<(&[u8], &[u8])> {
+//         if self.len() < count {
+//             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof").into());
+//         }
+//         let (left, right) = self.split_at(count);
+//         Ok((left, right))
+//     }
+// }
+
+const B: u32 = 128;
+
+pub fn varint_length(mut v: u64) -> usize {
+    let mut len = 1;
+    while v >= 128 {
+        v >>= 7;
+        len += 1;
+    }
+    len
 }
 
-impl BufferReader for &[u8] {
-    fn read_bytes(&self, count: usize) -> Result<(&[u8], &[u8])> {
-        if self.len() < count {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof").into());
+pub fn put_varint32(dst: &mut Vec<u8>, v: u32) {
+    let data_len = varint_length(u64::from(v));
+    let old_len = dst.len();
+    unsafe {
+        dst.reserve(data_len);
+        dst.set_len(data_len + old_len);
+    }
+    dst[old_len..].as_mut().encode_varint32(v).unwrap();
+}
+
+pub fn put_varint64(dst: &mut Vec<u8>, v: u64) {
+    let data_len = varint_length(v);
+    let old_len = dst.len();
+    unsafe {
+        dst.reserve(data_len);
+        dst.set_len(data_len + old_len);
+    }
+    dst[old_len..].as_mut().encode_varint64(v).unwrap();
+}
+
+pub trait DecodeVarint {
+    fn decode_varint32(&mut self) -> Result<u32>;
+    fn decode_varint64(&mut self) -> Result<u64>;
+}
+
+impl DecodeVarint for &[u8] {
+    fn decode_varint32(&mut self) -> Result<u32> {
+        let mut shift = 0;
+        let mut result = 0;
+        while shift <= 28 {
+            let byte = self.read_u8()?;
+            if u32::from(byte) & B == 0 {
+                result |= (u32::from(byte)) << shift;
+                return Ok(result);
+            } else {
+                result |= ((u32::from(byte)) & 127) << shift;
+            }
+            shift += 7;
         }
-        let (left, right) = self.split_at(count);
-        Ok((left, right))
+
+        Err(Error::Corruption(
+            "Error when decoding varint32".to_string(),
+        ))
+    }
+
+    fn decode_varint64(&mut self) -> Result<u64> {
+        let mut shift = 0;
+        let mut result = 0;
+        while shift <= 63 {
+            let byte = self.read_u8()?;
+            if u64::from(byte) & u64::from(B) == 0 {
+                result |= (u64::from(byte)) << shift;
+                return Ok(result);
+            } else {
+                result |= ((u64::from(byte)) & 127) << shift;
+            }
+            shift += 7;
+        }
+
+        Err(Error::Corruption(
+            "Error when decoding varint64".to_string(),
+        ))
+    }
+}
+
+pub trait VarLengthSliceReader {
+    fn get_length_prefixed_slice(&mut self) -> Result<&[u8]>;
+}
+
+pub trait VarLengthSliceWriter {
+    fn put_length_prefixed_slice(&mut self, data: &[u8]) -> Result<()>;
+}
+
+impl VarLengthSliceReader for &[u8] {
+    fn get_length_prefixed_slice(&mut self) -> Result<&[u8]> {
+        let len = self.decode_varint32()?;
+        self.read_bytes(len as usize)
+    }
+}
+
+impl VarLengthSliceWriter for &mut [u8] {
+    fn put_length_prefixed_slice(&mut self, data: &[u8]) -> Result<()> {
+        self.encode_varint32(data.len() as u32);
+        self.write_bytes(data)
     }
 }

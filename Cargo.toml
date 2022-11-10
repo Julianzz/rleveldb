@@ -10,9 +10,12 @@ byteorder = "1.4.3"
 bytes = "1.2.1"
 crc = "3.0.0"
 crc32fast = "1.3.2"
+crossbeam = { version = "0.8.2", features = ["crossbeam-channel"] }
 integer-encoding = "3.0.4"
 lru = "0.8.1"
+murmur3 = "0.5.2"
 rand = "0.8.5"
 snap = "1.0.5"
 tempfile = "3.3.0"
 thiserror = "1.0.37"
+

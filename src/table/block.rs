@@ -3,7 +3,7 @@ use crate::{
     cmp::Comparator,
     codec::{self, NumberDecoder, VarDecoder},
     error::{Error, Result},
-    iterator::DBItertor,
+    iterator::DBIterator,
     slice::UnsafeSlice,
 };
 use std::{cmp::Ordering, sync::Arc};
@@ -167,7 +167,7 @@ impl BlockIter {
     }
 }
 
-impl DBItertor for BlockIter {
+impl DBIterator for BlockIter {
     fn valid(&self) -> bool {
         self.current < self.restarts
     }

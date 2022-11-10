@@ -5,16 +5,16 @@ use rand::seq::index;
 use crate::{
     cmp::{BitWiseComparator, Comparator},
     error::{Error, Result},
-    iterator::DBItertor,
+    iterator::DBIterator,
     options::ReadOption,
 };
 
 pub trait BlockIterBuilder {
-    type Iter: DBItertor;
+    type Iter: DBIterator;
     fn build(&self, option: &ReadOption, index_val: &[u8]) -> Result<Self::Iter>;
 }
 
-pub struct TwoLevelIterator<I: DBItertor, B: BlockIterBuilder> {
+pub struct TwoLevelIterator<I: DBIterator, B: BlockIterBuilder> {
     block_builder: B,
     option: ReadOption,
     index_iter: I,
@@ -24,7 +24,7 @@ pub struct TwoLevelIterator<I: DBItertor, B: BlockIterBuilder> {
     status: Option<Error>,
 }
 
-impl<I: DBItertor, B: BlockIterBuilder> TwoLevelIterator<I, B> {
+impl<I: DBIterator, B: BlockIterBuilder> TwoLevelIterator<I, B> {
     pub fn new(index_iter: I, block_builder: B, option: ReadOption) -> Self {
         TwoLevelIterator {
             block_builder,
@@ -118,7 +118,7 @@ impl<I: DBItertor, B: BlockIterBuilder> TwoLevelIterator<I, B> {
     }
 }
 
-impl<I: DBItertor, B: BlockIterBuilder> DBItertor for TwoLevelIterator<I, B> {
+impl<I: DBIterator, B: BlockIterBuilder> DBIterator for TwoLevelIterator<I, B> {
     fn valid(&self) -> bool {
         if let Some(ref iter) = self.data_iter {
             iter.valid()

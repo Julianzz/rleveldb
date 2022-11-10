@@ -5,7 +5,7 @@ use std::{
 
 use integer_encoding::{FixedIntWriter, VarIntWriter};
 
-use crate::{cmp::Comparator};
+use crate::cmp::Comparator;
 
 pub struct BlockBuilder {
     comparator: Arc<dyn Comparator>,
@@ -42,7 +42,7 @@ impl BlockBuilder {
     pub fn current_size_estimate(&self) -> usize {
         self.buffer.len() + 4 * self.restarts.len() + 4
     }
-    
+
     pub fn last_key(&self) -> &[u8] {
         &self.last_key
     }
@@ -108,7 +108,7 @@ impl BlockBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::{cmp::BitWiseComparator};
+    use crate::cmp::BitWiseComparator;
 
     use super::*;
 

@@ -1,5 +1,5 @@
 use crc::{Crc, CRC_32_ISCSI};
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, ErrorKind};
 
 use crate::codec::{NumberDecoder, NumberEncoder};
 use crate::env::{SequencialFile, WritableFile};
@@ -45,7 +45,7 @@ impl<W: WritableFile> LogWriter<W> {
         }
     }
 
-    pub fn add_record<P: AsRef<[u8]>>(&mut self, record: P) -> Result<usize> {
+    pub fn add_record<P: AsRef<[u8]>>(&mut self, record: P) -> Result<()> {
         let mut record = record.as_ref();
         let mut first_frag = true;
         while !record.is_empty() {
@@ -80,7 +80,7 @@ impl<W: WritableFile> LogWriter<W> {
             record = &record[data_frag_size..];
             first_frag = false;
         }
-        Ok(0)
+        Ok(())
     }
 
     fn emit_record(&mut self, t: RecordType, data: &[u8], len: usize) -> Result<()> {
@@ -109,39 +109,65 @@ impl<W: WritableFile> LogWriter<W> {
         self.writer.flush()?;
         Ok(())
     }
+    pub fn sync(&mut self) -> Result<()> {
+        self.writer.sync()?;
+        Ok(())
+    }
 }
 
 pub struct LogReader<R: SequencialFile> {
-    src: R,
+    file: R,
     crc: Crc<u32>,
     blk_off: usize,
     block_size: usize,
     head_scratch: [u8; HEADER_SIZE],
-    checksums: bool,
+    checksum: bool,
+
+    eof: bool,
+    buf: Vec<u8>,
+    buf_length: usize,
 }
 
 impl<R: SequencialFile> LogReader<R> {
-    pub fn new(src: R, checksums: bool) -> Self {
+    pub fn new(file: R, checksum: bool) -> Self {
         LogReader {
-            src,
+            file,
             crc: Crc::<u32>::new(&CRC_32_ISCSI),
             blk_off: 0,
             block_size: BLOCK_SIZE,
             head_scratch: Default::default(),
-            checksums,
+            checksum,
+
+            eof: false,
+            buf: vec![0; BLOCK_SIZE],
+            buf_length: 0,
         }
     }
 
-    pub fn read_record(&mut self, dst: &mut Vec<u8>) -> Result<usize> {
+    pub fn clear_buf(&mut self) {
+        self.buf = vec![0; BLOCK_SIZE];
+        self.buf_length = 0;
+    }
+
+    pub fn read_physical_record(&mut self, dst: &mut Vec<u8>) -> Result<Option<usize>> {
         dst.clear();
         let mut dst_offset: usize = 0;
         loop {
             if self.block_size - self.blk_off < HEADER_SIZE {
-                self.src
+                self.file
                     .read_exact(&mut self.head_scratch[0..self.block_size - self.blk_off])?;
                 self.blk_off = 0;
             }
-            self.src.read_exact(&mut self.head_scratch)?;
+            let res = self.file.read_exact(&mut self.head_scratch);
+            if let Err(e) = res.as_ref() {
+                if let Error::IOError { source } = e {
+                    if source.kind() == ErrorKind::UnexpectedEof {
+                        return Ok(None);
+                    }
+                }
+            }
+            res?;
+
             self.blk_off += HEADER_SIZE;
 
             let mut buf = Cursor::new(self.head_scratch);
@@ -149,7 +175,7 @@ impl<R: SequencialFile> LogReader<R> {
             // let mut data = [..];
             let checksum = buf.decode_u32_le()?;
             let length = buf.decode_i16_le()?;
-            let r#type = buf.decode_u8()?;
+            let record_type = buf.decode_u8()?;
 
             // let checksum = data.read_u32::<LittleEndian>()?;
             // let length = data.read_u16::<LittleEndian>()?;
@@ -157,15 +183,15 @@ impl<R: SequencialFile> LogReader<R> {
 
             dst.resize(dst_offset + length as usize, 0);
 
-            self.src
+            self.file
                 .read_exact(&mut dst[dst_offset..dst_offset + length as usize])?;
             self.blk_off += length as usize;
 
             self.blk_off %= self.block_size;
 
-            if self.checksums {
+            if self.checksum {
                 let mut digest = self.crc.digest();
-                digest.update(&[r#type]);
+                digest.update(&[record_type]);
                 digest.update(&dst[dst_offset..dst_offset + length as usize]);
                 if digest.finalize() != checksum {
                     return Err(Error::Corruption("digest check failed".into()));
@@ -173,20 +199,23 @@ impl<R: SequencialFile> LogReader<R> {
             }
 
             dst_offset += length as usize;
-            let record_type = RecordType::from(r#type);
-            match record_type {
+            match RecordType::from(record_type) {
                 RecordType::Full => {
-                    return Ok(dst_offset);
+                    return Ok(Some(dst_offset));
                 }
                 RecordType::First | RecordType::Middle => {
                     continue;
                 }
                 RecordType::Last => {
-                    return Ok(dst_offset);
+                    return Ok(Some(dst_offset));
                 }
             }
             // self.src.read(buf);
         }
+    }
+
+    pub fn read_record(&mut self, dst: &mut Vec<u8>) -> Result<Option<usize>> {
+        self.read_physical_record(dst)
     }
 }
 
@@ -200,7 +229,7 @@ mod tests {
     };
 
     use super::LogWriter;
-    use std::{fs, path::PathBuf, str};
+    use std::str;
 
     fn create_tmp_file() -> TempDir {
         tempfile::Builder::new()
