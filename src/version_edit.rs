@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use crate::{
-    codec::{put_varint32, put_varint64, VarLengthSliceReader, VarintReader},
+    codec::{self, VarintReader, VarintWriter},
     consts::NUM_LEVELS,
     error::{Error, Result},
     format::InternalKey,
@@ -88,49 +88,49 @@ impl VersionEdit {
 
     pub fn encode(&self, dst: &mut Vec<u8>) {
         if let Some(c) = self.comparator.as_ref() {
-            put_varint32(dst, COMPARATOR);
-            put_varint32(dst, c.as_bytes().len() as u32);
+            dst.write_var_u32(COMPARATOR).unwrap();
+            dst.write_var_u32(c.as_bytes().len() as u32).unwrap();
             dst.write_all(c.as_bytes()).unwrap();
         };
 
         if let Some(c) = self.log_number.as_ref() {
-            put_varint32(dst, LOG_NUMBER);
-            put_varint64(dst, *c);
+            dst.write_var_u32(LOG_NUMBER).unwrap();
+            dst.write_var_u64(*c).unwrap();
         };
         if let Some(c) = self.prev_log_number.as_ref() {
-            put_varint32(dst, PREV_LOG_NUMBER);
-            put_varint64(dst, *c);
+            dst.write_var_u32(PREV_LOG_NUMBER).unwrap();
+            dst.write_var_u64(*c).unwrap();
         };
         if let Some(c) = self.next_file_number.as_ref() {
-            put_varint32(dst, NEXT_FILE_NUMBER);
-            put_varint64(dst, *c);
+            dst.write_var_u32(NEXT_FILE_NUMBER).unwrap();
+            dst.write_var_u64(*c).unwrap();
         };
         if let Some(c) = self.last_sequence.as_ref() {
-            put_varint32(dst, LAST_SEQUENCE);
-            put_varint64(dst, *c);
+            dst.write_var_u32(LAST_SEQUENCE).unwrap();
+            dst.write_var_u64(*c).unwrap();
         };
         for (n, k) in self.compact_pointers.iter() {
-            put_varint32(dst, COMPACTION_POINTER);
-            put_varint32(dst, *n);
+            dst.write_var_u32(COMPACTION_POINTER).unwrap();
+            dst.write_var_u32(*n).unwrap();
             let key = k.encode();
-            put_varint32(dst, key.len() as u32);
+            dst.write_var_u32(key.len() as u32).unwrap();
             dst.write_all(key).unwrap();
         }
         for (n, m) in self.deleted_files.iter() {
-            put_varint32(dst, DELETED_FILES);
-            put_varint32(dst, *n);
-            put_varint64(dst, *m);
+            dst.write_var_u32(DELETED_FILES).unwrap();
+            dst.write_var_u32(*n).unwrap();
+            dst.write_var_u64(*m).unwrap();
         }
 
         for (n, f) in self.new_files.iter() {
-            put_varint32(dst, NEW_FILE);
-            put_varint32(dst, *n);
-            put_varint64(dst, f.number);
-            put_varint64(dst, f.file_size);
+            dst.write_var_u32(NEW_FILE).unwrap();
+            dst.write_var_u32(*n).unwrap();
+            dst.write_var_u64(f.number).unwrap();
+            dst.write_var_u64(f.file_size).unwrap();
             let (small, large) = (f.smallest.encode(), f.largest.encode());
-            put_varint32(dst, small.len() as u32);
+            dst.write_var_u32(small.len() as u32).unwrap();
             dst.write_all(small).unwrap();
-            put_varint32(dst, large.len() as u32);
+            dst.write_var_u32(large.len() as u32).unwrap();
             dst.write_all(large).unwrap();
         }
     }
@@ -145,7 +145,7 @@ impl VersionEdit {
             if let Ok(tag) = src.read_var_u32() {
                 match tag {
                     COMPARATOR => {
-                        if let Ok(s) = src.read_length_prefixed_slice() {
+                        if let Ok(s) = codec::read_length_prefixed_slice(&mut src) {
                             self.comparator = Some(String::from_utf8_lossy(s).to_string());
                         } else {
                             msg = Some(String::from("compation pointer"));
@@ -258,7 +258,7 @@ fn get_level(src: &mut &[u8], level: &mut u32) -> Result<()> {
 }
 
 fn get_internal_key(src: &mut &[u8], dst: &mut InternalKey) -> Result<()> {
-    let data = (*src).read_length_prefixed_slice()?;
+    let data = codec::read_length_prefixed_slice(src)?;
     if !dst.decode(data) {
         Err(Error::Corruption("internal key decode failed".to_string()))
     } else {

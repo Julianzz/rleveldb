@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     cmp::{Comparator, InternalKeyComparator, KeyComparator},
-    codec::{Decoder, NumberReader, VarLengthSliceWriter, VarintReader},
+    codec::{self, NumberReader, NumberWriter, VarInt, VarintReader, VarintWriter},
     error::{Error, Result},
     iterator::DBIterator,
     skiplist::{SkipList, SkipListIter},
@@ -18,7 +18,7 @@ use crate::{
     utils::buffer::BufferReader,
 };
 
-use integer_encoding::{FixedIntWriter, VarInt, VarIntWriter};
+// use integer_encoding::{FixedIntWriter, VarInt, VarIntWriter};
 
 pub struct MemTable {
     table: Arc<SkipList<Vec<u8>>>,
@@ -54,10 +54,10 @@ impl MemTable {
         let size = key_size + value_size + key_size.required_space() + value_size.required_space();
 
         let mut buf = Vec::with_capacity(size);
-        buf.write_varint(key_size).unwrap();
+        buf.write_var_u32(key_size as u32).unwrap();
         buf.write_all(key).unwrap();
-        buf.write_fixedint(t as u64 | (seq << 8)).unwrap();
-        buf.write_varint(value_size).unwrap();
+        buf.write_u64_le(t as u64 | (seq << 8)).unwrap();
+        buf.write_var_u32(value_size as u32).unwrap();
         buf.write_all(value).unwrap();
 
         self.memory_usage
@@ -133,10 +133,8 @@ impl DBIterator for MemTableIterator {
     }
 
     fn seek(&mut self, target: &[u8]) {
-        let tmp = &mut self.tmp;
-        tmp.clear();
-        tmp.write_length_prefixed_slice(target);
-
+        self.tmp.clear();
+        codec::write_length_prefixed_slice(&mut self.tmp, target).unwrap();
         self.iter.seek(&self.tmp);
     }
 
@@ -149,15 +147,15 @@ impl DBIterator for MemTableIterator {
     }
 
     fn key(&self) -> &[u8] {
-        let raw = self.iter.key();
-        let (result, _) = raw.decode_length_prefix_slice().unwrap();
-        result
+        let mut raw = self.iter.key();
+        codec::read_length_prefixed_slice(&mut raw).unwrap()
+        // result
     }
 
     fn value(&self) -> &[u8] {
-        let raw = self.iter.key();
-        let (_, offset) = raw.decode_length_prefix_slice().unwrap();
-        let (result, _) = raw[offset..].decode_length_prefix_slice().unwrap();
+        let mut raw = self.iter.key();
+        let _ = codec::read_length_prefixed_slice(&mut raw).unwrap();
+        let result = codec::read_length_prefixed_slice(&mut raw).unwrap();
         result
     }
 
@@ -165,7 +163,6 @@ impl DBIterator for MemTableIterator {
         todo!()
     }
 }
-
 
 pub struct LookupKey {
     key: Vec<u8>,
@@ -179,9 +176,9 @@ impl LookupKey {
         let size = key_size + key_size.required_space();
 
         let mut buf = Vec::with_capacity(size);
-        buf.write_varint(key_size).unwrap();
+        buf.write_var_u32(key_size as u32).unwrap();
         buf.write_all(key).unwrap();
-        buf.write_fixedint(seq << 8 | t as u64).unwrap();
+        buf.write_u64_le(seq << 8 | t as u64).unwrap();
 
         LookupKey {
             key: buf,

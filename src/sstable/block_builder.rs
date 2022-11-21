@@ -3,9 +3,10 @@ use std::{
     sync::Arc,
 };
 
-use integer_encoding::{FixedIntWriter, VarIntWriter};
-
-use crate::cmp::Comparator;
+use crate::{
+    cmp::Comparator,
+    codec::{NumberWriter, VarintWriter},
+};
 
 pub struct BlockBuilder {
     comparator: Arc<dyn Comparator>,
@@ -79,9 +80,9 @@ impl BlockBuilder {
 
         let no_shared = key.len() - shared;
 
-        self.buffer.write_varint(shared).unwrap();
-        self.buffer.write_varint(no_shared).unwrap();
-        self.buffer.write_varint(val.len()).unwrap();
+        self.buffer.write_var_u32(shared as u32).unwrap();
+        self.buffer.write_var_u32(no_shared as u32).unwrap();
+        self.buffer.write_var_u32(val.len() as u32).unwrap();
 
         self.buffer.extend_from_slice(&key[shared..]);
         self.buffer.extend_from_slice(val);
@@ -96,10 +97,10 @@ impl BlockBuilder {
     pub fn finish(mut self) -> Vec<u8> {
         self.buffer.reserve(self.restarts.len() * 4 + 4);
         for r in self.restarts.iter() {
-            self.buffer.write_fixedint(*r).unwrap();
+            self.buffer.write_u32_le(*r).unwrap();
         }
         self.buffer
-            .write_fixedint(self.restarts.len() as u32)
+            .write_u32_le(self.restarts.len() as u32)
             .unwrap();
 
         self.buffer

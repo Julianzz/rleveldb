@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use bytes::Buf;
-use integer_encoding::VarIntWriter;
+// use integer_encoding::VarIntWriter;
 
 use crate::{
-    codec::{Decoder, NumberReader, VarLengthSliceReader},
+    codec::{self, NumberReader, VarintWriter},
     error::{Error, Result},
     types::SequenceNumber,
     MemTable, ValueType,
@@ -33,16 +33,16 @@ impl WriteBatch {
     pub fn put(&mut self, key: &[u8], value: &[u8]) {
         self.set_count(self.count() + 1);
         self.rep.push(ValueType::Value as u8);
-        self.rep.write_varint(key.len() as u32).unwrap();
+        self.rep.write_var_u32(key.len() as u32).unwrap();
         self.rep.extend_from_slice(key);
-        self.rep.write_varint(value.len() as u32).unwrap();
+        self.rep.write_var_u32(value.len() as u32).unwrap();
         self.rep.extend_from_slice(value);
     }
 
     pub fn delete(&mut self, key: &[u8]) {
         self.set_count(self.count() + 1);
         self.rep.push(ValueType::Deletetion as u8);
-        self.rep.write_varint(key.len() as u32).unwrap();
+        self.rep.write_var_u32(key.len() as u32).unwrap();
         self.rep.extend_from_slice(key);
     }
 
@@ -97,18 +97,21 @@ impl WriteBatch {
         }
         buf.advance(HEAD_SIZE);
         let mut found = 0;
-        while buf.is_empty() {
+        while !buf.is_empty() {
             let tag = ValueType::try_from(buf.read_u8_le()?)?;
             found += 1;
             match tag {
                 ValueType::Deletetion => {
-                    let key = buf.read_length_prefixed_slice()?;
+                    let key = codec::read_length_prefixed_slice(&mut buf)?;
                     handler.delete(key);
                 }
                 ValueType::Value => {
-                    let (key, key_offset) = buf.decode_length_prefix_slice()?;
-                    let (value, value_offset) = buf[key_offset..].decode_length_prefix_slice()?;
-                    buf.advance(value_offset + value_offset);
+                    // let (key, key_offset) = codec::decode_length_prefix_slice(&buf)?;
+                    // let (value, value_offset) =
+                    //     codec::decode_length_prefix_slice(&mut &buf[key_offset..])?;
+                    let key = codec::read_length_prefixed_slice(&mut buf).unwrap();
+                    let value = codec::read_length_prefixed_slice(&mut buf).unwrap();
+                    // buf.advance(key_offset + value_offset);
                     handler.put(key, value);
                 }
             }

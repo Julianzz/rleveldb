@@ -1,10 +1,9 @@
 use std::{io::Read, ops::Deref};
 
-use integer_encoding::VarInt;
 use snap::read::FrameDecoder;
 
 use crate::{
-    codec::Decoder,
+    codec::{Decoder, VarInt},
     env::RandomAccessFile,
     error::{Error, Result},
     options::{Compress, ReadOption},

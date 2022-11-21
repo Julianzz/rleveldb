@@ -170,7 +170,7 @@ impl<R: SequencialFile> LogReader<R> {
 
             let mut buf = &self.head_scratch[..];
             let checksum = buf.read_u32_le()?;
-            let length = buf.read_i16_le()?;
+            let length = buf.read_u16_le()?;
             let record_type = buf.read_u8_le()?;
 
             dst.resize(dst_offset + length as usize, 0);

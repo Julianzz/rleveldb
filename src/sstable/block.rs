@@ -1,7 +1,7 @@
 use super::format::BlockContent;
 use crate::{
     cmp::Comparator,
-    codec::{self, Decoder, NumberReader, VarintReader},
+    codec::{Decoder, NumberReader, VarintReader},
     error::{Error, Result},
     iterator::DBIterator,
     slice::UnsafeSlice,
