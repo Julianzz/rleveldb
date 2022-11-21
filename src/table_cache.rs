@@ -7,7 +7,7 @@ use crate::{
     error::Result,
     filenames::{sst_table_file_name, table_file_name},
     options::Options,
-    table::table::Table,
+    sstable::Table,
 };
 
 #[derive(Clone)]
@@ -15,6 +15,7 @@ pub struct TableCache<E> {
     env: E,
     dbname: String,
     options: Arc<Options>,
+    size: u64,
 }
 
 impl<E: Env> TableCache<E> {
@@ -23,7 +24,8 @@ impl<E: Env> TableCache<E> {
         TableCache {
             dbname,
             env,
-            options: options,
+            options,
+            size,
         }
     }
 
@@ -46,7 +48,7 @@ impl<E: Env> TableCache<E> {
             Ok(file)
         } else {
             let old_file_name = sst_table_file_name(&self.dbname, file_number);
-            self.env.new_random_access_file(&old_file_name)
+            Ok(self.env.new_random_access_file(&old_file_name)?)
         }
     }
 }

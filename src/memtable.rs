@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     cmp::{Comparator, InternalKeyComparator, KeyComparator},
-    codec::{decode_var_u32, put_varint32, NumberDecoder, VarDecoder},
+    codec::{Decoder, NumberReader, VarLengthSliceWriter, VarintReader},
     error::{Error, Result},
     iterator::DBIterator,
     skiplist::{SkipList, SkipListIter},
@@ -75,7 +75,7 @@ impl MemTable {
         if iter.valid() {
             let mut seek_key = iter.key();
 
-            let internal_key_len = seek_key.decode_var_u32().unwrap();
+            let internal_key_len = seek_key.read_var_u32().unwrap();
             let mut internal_key = seek_key.read_bytes(internal_key_len as usize).unwrap();
             let seek_user_key = internal_key.read_bytes(internal_key.len() - 8).unwrap();
             if self
@@ -83,9 +83,9 @@ impl MemTable {
                 .compare(search_key.user_key(), seek_user_key)
                 == Ordering::Equal
             {
-                let record_type = internal_key.decode_u64_le().unwrap() & 0xff;
+                let record_type = internal_key.read_u64_le().unwrap() & 0xff;
                 if record_type == ValueType::Value as u64 {
-                    let value_len = seek_key.decode_var_u32().unwrap();
+                    let value_len = seek_key.read_var_u32().unwrap();
                     let user_value = seek_key.read_bytes(value_len as usize).unwrap();
                     return Ok(Some(user_value.into()));
                 } else if record_type == ValueType::Deletetion as u64 {
@@ -113,7 +113,7 @@ pub struct MemTableIterator {
 impl MemTableIterator {
     pub fn new(iter: SkipListIter<Vec<u8>>) -> Self {
         MemTableIterator {
-            iter: iter,
+            iter,
             tmp: Vec::new(),
         }
     }
@@ -133,8 +133,9 @@ impl DBIterator for MemTableIterator {
     }
 
     fn seek(&mut self, target: &[u8]) {
-        self.tmp.clear();
-        encode_key(&mut self.tmp, target);
+        let tmp = &mut self.tmp;
+        tmp.clear();
+        tmp.write_length_prefixed_slice(target);
 
         self.iter.seek(&self.tmp);
     }
@@ -149,14 +150,14 @@ impl DBIterator for MemTableIterator {
 
     fn key(&self) -> &[u8] {
         let raw = self.iter.key();
-        let (result, _) = get_length_prefixed_slice(raw);
+        let (result, _) = raw.decode_length_prefix_slice().unwrap();
         result
     }
 
     fn value(&self) -> &[u8] {
         let raw = self.iter.key();
-        let (_, offset) = get_length_prefixed_slice(raw);
-        let (result, _) = get_length_prefixed_slice(&raw[offset..]);
+        let (_, offset) = raw.decode_length_prefix_slice().unwrap();
+        let (result, _) = raw[offset..].decode_length_prefix_slice().unwrap();
         result
     }
 
@@ -165,16 +166,6 @@ impl DBIterator for MemTableIterator {
     }
 }
 
-pub fn get_length_prefixed_slice<'a>(buf: &'a [u8]) -> (&'a [u8], usize) {
-    let (len, offset) = decode_var_u32(buf).unwrap();
-    (&buf[offset..offset + len as usize], offset + len as usize)
-}
-
-fn encode_key(scratch: &mut Vec<u8>, target: &[u8]) {
-    // scratch.clear();
-    put_varint32(scratch, target.len() as u32);
-    scratch.extend_from_slice(target);
-}
 
 pub struct LookupKey {
     key: Vec<u8>,
@@ -220,7 +211,7 @@ mod tests {
     fn test_memtable() {
         let user_comparator = BitWiseComparator {};
         let comparator = InternalKeyComparator::new(Arc::new(user_comparator));
-        let mut table = MemTable::new(comparator);
+        let table = MemTable::new(comparator);
         let datas = &[
             ("liuzhenzhong", 1u64, ValueType::Value, "zhong"),
             ("liuzhong", 2u64, ValueType::Value, "time"),

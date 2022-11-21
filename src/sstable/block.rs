@@ -1,7 +1,7 @@
 use super::format::BlockContent;
 use crate::{
     cmp::Comparator,
-    codec::{self, NumberDecoder, VarDecoder},
+    codec::{self, Decoder, NumberReader, VarintReader},
     error::{Error, Result},
     iterator::DBIterator,
     slice::UnsafeSlice,
@@ -23,7 +23,7 @@ impl Block {
                 "bad block contents, size too small".into(),
             ));
         }
-        let num_restarts = codec::decode_u32_le(&content[n - 4..]);
+        let (num_restarts, _) = content[n - 4..].decode_u32_le().unwrap();
         let max_restart_allowed = (n - RESTART_SIZE) / RESTART_SIZE;
         if num_restarts as usize > max_restart_allowed {
             Err(Error::Corruption("bac block contents".into()))
@@ -105,9 +105,9 @@ impl BlockIter {
             // Fast path: all three values are encoded in one byte each
             step = 3
         } else {
-            shared = data.decode_var_u32()?;
-            non_shared = data.decode_var_u32()?;
-            value_len = data.decode_var_u32()?;
+            shared = data.read_var_u32()?;
+            non_shared = data.read_var_u32()?;
+            value_len = data.read_var_u32()?;
             step -= data.len();
         }
 
@@ -124,7 +124,7 @@ impl BlockIter {
         assert!(index < self.num_restarts);
         let offset = self.restarts as usize + RESTART_SIZE * index as usize;
         let mut buf = &self.block_content.data[offset..];
-        buf.decode_u32_le().unwrap()
+        buf.read_u32_le().unwrap()
     }
 
     fn parse_next_entry(&mut self) -> bool {
@@ -264,7 +264,7 @@ impl DBIterator for BlockIter {
 
 #[cfg(test)]
 mod tests {
-    use crate::{cmp::BitWiseComparator, table::block_builder::BlockBuilder};
+    use crate::{cmp::BitWiseComparator, sstable::block_builder::BlockBuilder};
 
     use super::*;
 

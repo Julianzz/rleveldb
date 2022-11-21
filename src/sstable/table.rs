@@ -4,7 +4,7 @@ use snap::write::FrameEncoder;
 
 use crate::{
     cmp::{BitWiseComparator, Comparator},
-    codec::NumberEncoder,
+    codec::NumberWriter,
     env::{RandomAccessFile, WritableFile},
     error::{Error, Result},
     iterator::DBIterator,
@@ -55,10 +55,10 @@ impl<R: RandomAccessFile> Table<R> {
         };
         // TODO cache
         let table = Table {
-            file: file,
-            options: options,
+            file,
+            options,
             meta_index_handle: footer.meta_index_handle,
-            index_block: index_block,
+            index_block,
             filter_block_data: filter_meta_data,
         };
         Ok(table)
@@ -110,12 +110,12 @@ impl<R: RandomAccessFile> Table<R> {
     }
     pub(crate) fn iter(
         self: Arc<Table<R>>,
-        option: ReadOption,
+        option: &ReadOption,
     ) -> TwoLevelIterator<BlockIter, TableBlockIterBuilder<R>> {
         let index_iter = self.index_block.iter(self.options.comparator.clone());
         let block_iter_builder = TableBlockIterBuilder { table: self };
 
-        TwoLevelIterator::new(index_iter, block_iter_builder, option)
+        TwoLevelIterator::new(index_iter, block_iter_builder, option.clone())
     }
 
     pub(crate) fn print_indexes(&self) {
@@ -141,7 +141,7 @@ impl<R: RandomAccessFile> Table<R> {
     }
 }
 
-pub(crate) struct TableBlockIterBuilder<R: RandomAccessFile> {
+pub struct TableBlockIterBuilder<R: RandomAccessFile> {
     table: Arc<Table<R>>,
 }
 impl<R: RandomAccessFile> BlockIterBuilder for TableBlockIterBuilder<R> {
@@ -181,8 +181,8 @@ impl<W: WritableFile> TableBuiler<W> {
             filter_block_builder
         });
         TableBuiler {
-            options: options,
-            file: file,
+            options,
+            file,
             offset: 0,
             data_block: Some(data_block),
             index_block: Some(index_block),
@@ -213,9 +213,9 @@ impl<W: WritableFile> TableBuiler<W> {
                 .find_shortest_separator(&mut self.last_key, key);
             let mut handle_encoding = vec![0; 16];
             self.pending_handle.encode(&mut handle_encoding);
-            self.index_block
-                .as_mut()
-                .map(|b| b.add(&self.last_key, &handle_encoding));
+            if let Some(b) = self.index_block.as_mut() {
+                b.add(&self.last_key, &handle_encoding)
+            }
             self.pending_index_entry = false;
         }
 
@@ -224,7 +224,7 @@ impl<W: WritableFile> TableBuiler<W> {
         }
 
         self.last_key.clear();
-        self.last_key.extend_from_slice(&key);
+        self.last_key.extend_from_slice(key);
         self.num_entries += 1;
         let data_block = self.data_block.as_mut().unwrap();
         data_block.add(key, value);
@@ -238,7 +238,7 @@ impl<W: WritableFile> TableBuiler<W> {
     pub fn flush(&mut self) -> Result<()> {
         assert!(self.data_block.is_some());
 
-        let mut data_block = self
+        let data_block = self
             .data_block
             .replace(BlockBuilder::new(
                 self.options.comparator.clone(),
@@ -262,9 +262,9 @@ impl<W: WritableFile> TableBuiler<W> {
         self.pending_index_entry = true;
         self.file.flush()?;
 
-        self.filter_block
-            .as_mut()
-            .map(|b| b.start_block(offset as usize));
+        if let Some(b) = self.filter_block.as_mut() {
+            b.start_block(offset as usize);
+        }
 
         Ok(())
     }
@@ -333,7 +333,7 @@ impl<W: WritableFile> TableBuiler<W> {
         self.offset += buf.len() as u64;
 
         if sync {
-            self.file.sync();
+            self.file.sync()?;
         }
 
         Ok(self.offset)
@@ -342,7 +342,7 @@ impl<W: WritableFile> TableBuiler<W> {
 
 fn write_block<W: WritableFile>(
     file: &mut W,
-    mut block: BlockBuilder,
+    block: BlockBuilder,
     handle: &mut BlockHandle,
     compress_type: Compress,
     compress_out: &mut Vec<u8>,
@@ -386,8 +386,8 @@ fn write_raw_block<W: WritableFile>(
 
     let mut trailer = [0u8; BLOCK_TRAILER_SIZE];
     let mut buf = trailer.as_mut();
-    buf.encode_u8(compress_type.as_byte()).unwrap();
-    buf.encode_u32_le(checksum).unwrap();
+    buf.write_u8_le(compress_type.as_byte()).unwrap();
+    buf.write_u32_le(checksum).unwrap();
 
     file.append(block_content)?;
     file.append(&trailer)?;
@@ -399,7 +399,7 @@ fn write_raw_block<W: WritableFile>(
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use crate::{cmp::BitWiseComparator, env::RandomAccessFile, filter::BloomFilterPolicy};
+    use crate::{cmp::BitWiseComparator, env::{RandomAccessFile, IoResult}, filter::BloomFilterPolicy};
 
     use super::*;
     pub struct MemFs {
@@ -413,31 +413,31 @@ mod tests {
     }
 
     impl RandomAccessFile for MemFs {
-        fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> IoResult<usize> {
             let data = self.data.borrow();
             let data = &data[offset as usize..offset as usize + buf.len()];
             buf.copy_from_slice(data);
             Ok(buf.len())
         }
 
-        fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> Result<()> {
+        fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> IoResult<()> {
             self.read_at(buf, offset)?;
             Ok(())
         }
     }
 
     impl WritableFile for MemFs {
-        fn append(&mut self, data: &[u8]) -> Result<()> {
+        fn append(&mut self, data: &[u8]) -> IoResult<()> {
             let mut v = self.data.as_ref().borrow_mut();
             v.extend_from_slice(data);
             Ok(())
         }
 
-        fn flush(&mut self) -> Result<()> {
+        fn flush(&mut self) -> IoResult<()> {
             Ok(())
         }
 
-        fn sync(&mut self) -> Result<()> {
+        fn sync(&mut self) -> IoResult<()> {
             Ok(())
         }
     }
@@ -482,7 +482,7 @@ mod tests {
         table.print_indexes();
 
         let mut data_iter = datas.iter();
-        let mut iter = table.iter(read_option);
+        let mut iter = table.iter(&read_option);
         iter.seek_to_first();
         loop {
             if !iter.valid() {

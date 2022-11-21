@@ -7,7 +7,7 @@ use crate::{
     format::InternalKey,
     iterator::DBIterator,
     options::{Options, ReadOption},
-    table::table::{Table, TableBuiler},
+    sstable::{Table, TableBuiler},
     table_cache::TableCache,
     utils::release::DropRelease,
     version::FileMetaData,
@@ -37,19 +37,17 @@ pub fn build_table<E: Env>(
         meta.smallest = smallest;
         meta.largest = InternalKey::empty();
 
-        let mut next: &[u8] = &[];
-
         while iter.valid() {
-            next = iter.value();
             builder.add(iter.key(), iter.value()).unwrap();
+            meta.largest.decode(iter.key()); //optimize this??
+            iter.next();
         }
-        meta.largest.decode(next);
 
         meta.file_size = builder.finish(true)?;
 
         // verify file
         let table = table_cache.find_table(meta.number, meta.file_size)?;
-        let mut iter = Table::iter(table, ReadOption::default());
+        let mut iter = Table::iter(table, &ReadOption::default());
         iter.status()?;
     }
 

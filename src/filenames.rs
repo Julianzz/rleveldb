@@ -7,10 +7,10 @@ use crate::{
 
 pub type FileNum = u64;
 
-pub struct FileMeta {
-    pub num: FileNum,
-    pub size: usize,
-}
+// pub struct FileMeta {
+//     pub num: FileNum,
+//     pub size: usize,
+// }
 
 const CURRENT: &str = "CURRENT";
 const LOCK: &str = "LOCK";
@@ -33,7 +33,7 @@ pub fn parse_file_name<P: AsRef<Path>>(f: P) -> Result<(FileNum, FileType)> {
     } else if f == LOCK {
         Ok((0, FileType::DBLock))
     } else if f == "LOG" || f == "LOG.old" {
-        Ok((0, FileType::Log))
+        Ok((0, FileType::InfoLog))
     } else if f.starts_with("MANIFEST-") {
         if let Some(ix) = f.find('-') {
             if let Ok(num) = FileNum::from_str_radix(&f[ix + 1..], 10) {
@@ -106,8 +106,8 @@ pub fn set_current_file<E: Env>(env: E, db_name: &String, descriptor_num: u64) -
 
     let res = write_string_to_file_sync(env.clone(), content.as_bytes(), &tmp);
     if res.is_ok() {
-        env.rename_file(&tmp, &current_file_name(db_name))
+        Ok(env.rename_file(&tmp, &current_file_name(db_name))?)
     } else {
-        env.delete_file(&tmp)
+        Ok(env.delete_file(&tmp)?)
     }
 }

@@ -22,11 +22,12 @@ pub trait Cache<K: Sized, V: Sized> {
     fn total_charge(&self) -> u64;
 }
 
+type CacheShard<K, V> = Arc<Mutex<LruCacheInner<K, V>>>;
 pub struct ShardLruCache<K, V>
 where
     K: Eq + Hash,
 {
-    shards: Box<[Arc<Mutex<LruCacheInner<K, V>>>]>,
+    shards: Box<[CacheShard<K, V>]>,
     last_id: AtomicU64,
 }
 
@@ -55,7 +56,7 @@ where
     }
 
     fn get_shard(&self, key: &K) -> MutexGuard<LruCacheInner<K, V>> {
-        let shard = Self::shard(&key);
+        let shard = Self::shard(key);
         assert!(shard < NUM_SHARDS as u64);
         self.shards.get(shard as usize).unwrap().lock().unwrap()
     }
@@ -71,12 +72,12 @@ where
     }
 
     fn lookup(&self, key: &K) -> Option<Arc<V>> {
-        let mut lru = self.get_shard(&key);
+        let mut lru = self.get_shard(key);
         lru.lookup(key)
     }
 
     fn erase(&self, key: &K) {
-        let mut lru = self.get_shard(&key);
+        let mut lru = self.get_shard(key);
         lru.erase(key);
     }
 
@@ -121,7 +122,7 @@ impl<K: Eq + Hash, V> LruCacheInner<K, V> {
 
         self.usage += charge;
         while self.usage > self.capacity && !self.lru.is_empty() {
-            let (k, evicted_val) = self.lru.pop_lru().unwrap();
+            let (_, evicted_val) = self.lru.pop_lru().unwrap();
             self.usage -= evicted_val.charge;
         }
         let value = Arc::new(value);
@@ -138,11 +139,7 @@ impl<K: Eq + Hash, V> LruCacheInner<K, V> {
     }
 
     pub fn lookup(&mut self, key: &K) -> Option<Arc<V>> {
-        if let Some(h) = self.lru.get(key) {
-            Some(h.value.clone())
-        } else {
-            None
-        }
+        self.lru.get(key).map(|h| h.value.clone())
     }
 
     pub fn erase(&mut self, key: &K) {

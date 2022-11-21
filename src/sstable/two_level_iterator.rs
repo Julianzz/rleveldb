@@ -1,6 +1,4 @@
-use std::{cmp::Ordering, collections::btree_map::Iter};
-
-use rand::seq::index;
+use std::cmp::Ordering;
 
 use crate::{
     cmp::{BitWiseComparator, Comparator},
@@ -184,9 +182,9 @@ impl<I: DBIterator, B: BlockIterBuilder> DBIterator for TwoLevelIterator<I, B> {
     }
 
     fn status(&mut self) -> Result<()> {
-        let _ = self.index_iter.status()?;
+        self.index_iter.status()?;
         if let Some(ref mut data_iter) = self.data_iter {
-            let _ = data_iter.status()?;
+            data_iter.status()?;
         };
         if self.status.is_some() {
             return Err(self.status.take().unwrap());

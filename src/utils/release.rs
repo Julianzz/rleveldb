@@ -10,6 +10,6 @@ impl<T: Fn()> Drop for DropRelease<T> {
 
 impl<T: Fn()> DropRelease<T> {
     pub fn new(func: T) -> Self {
-        DropRelease { func: func }
+        DropRelease { func }
     }
 }

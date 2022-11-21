@@ -1,18 +1,13 @@
-use std::{cmp, sync::Arc};
-
-use byteorder::{LittleEndian, ReadBytesExt};
-use bytes::BufMut;
-
 use crate::{slice::UnsafeSlice, utils::hash::bloom_hash};
+use std::{cmp, sync::Arc};
 
 pub trait FilterPolicy {
     fn name(&self) -> &'static str;
 
-    fn create_filter(&self, keys: &Vec<UnsafeSlice>, dst: &mut Vec<u8>);
+    fn create_filter(&self, keys: &[UnsafeSlice], dst: &mut Vec<u8>);
 
     fn key_match(&self, key: &[u8], filter: &[u8]) -> bool;
 }
-
 
 pub struct BloomFilterPolicy {
     bits_per_key: usize,
@@ -37,7 +32,7 @@ impl FilterPolicy for BloomFilterPolicy {
         "leveldb.BuiltinBloomFilter2"
     }
 
-    fn create_filter(&self, keys: &Vec<UnsafeSlice>, dst: &mut Vec<u8>) {
+    fn create_filter(&self, keys: &[UnsafeSlice], dst: &mut Vec<u8>) {
         let mut bits = keys.len() * self.bits_per_key;
         bits = cmp::min(bits, 64);
 

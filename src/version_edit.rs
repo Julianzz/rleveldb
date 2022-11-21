@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use crate::{
-    codec::{put_varint32, put_varint64, DecodeVarint, VarLengthSliceReader},
+    codec::{put_varint32, put_varint64, VarLengthSliceReader, VarintReader},
     consts::NUM_LEVELS,
     error::{Error, Result},
     format::InternalKey,
@@ -72,7 +72,7 @@ impl VersionEdit {
         smallest: InternalKey,
         largest: InternalKey,
     ) {
-        let mut file_meta = FileMetaData {
+        let file_meta = FileMetaData {
             allowed_seeks: 0,
             number: file_num,
             file_size,
@@ -87,34 +87,34 @@ impl VersionEdit {
     }
 
     pub fn encode(&self, dst: &mut Vec<u8>) {
-        self.comparator.as_ref().map(|c| {
+        if let Some(c) = self.comparator.as_ref() {
             put_varint32(dst, COMPARATOR);
             put_varint32(dst, c.as_bytes().len() as u32);
             dst.write_all(c.as_bytes()).unwrap();
-        });
+        };
 
-        self.log_number.as_ref().map(|c| {
+        if let Some(c) = self.log_number.as_ref() {
             put_varint32(dst, LOG_NUMBER);
             put_varint64(dst, *c);
-        });
-        self.prev_log_number.as_ref().map(|c| {
+        };
+        if let Some(c) = self.prev_log_number.as_ref() {
             put_varint32(dst, PREV_LOG_NUMBER);
             put_varint64(dst, *c);
-        });
-        self.next_file_number.as_ref().map(|c| {
+        };
+        if let Some(c) = self.next_file_number.as_ref() {
             put_varint32(dst, NEXT_FILE_NUMBER);
             put_varint64(dst, *c);
-        });
-        self.last_sequence.as_ref().map(|c| {
+        };
+        if let Some(c) = self.last_sequence.as_ref() {
             put_varint32(dst, LAST_SEQUENCE);
             put_varint64(dst, *c);
-        });
+        };
         for (n, k) in self.compact_pointers.iter() {
             put_varint32(dst, COMPACTION_POINTER);
             put_varint32(dst, *n);
             let key = k.encode();
             put_varint32(dst, key.len() as u32);
-            dst.write_all(key);
+            dst.write_all(key).unwrap();
         }
         for (n, m) in self.deleted_files.iter() {
             put_varint32(dst, DELETED_FILES);
@@ -129,9 +129,9 @@ impl VersionEdit {
             put_varint64(dst, f.file_size);
             let (small, large) = (f.smallest.encode(), f.largest.encode());
             put_varint32(dst, small.len() as u32);
-            dst.write_all(small);
+            dst.write_all(small).unwrap();
             put_varint32(dst, large.len() as u32);
-            dst.write_all(large);
+            dst.write_all(large).unwrap();
         }
     }
 
@@ -142,10 +142,10 @@ impl VersionEdit {
         let mut key = InternalKey::default();
 
         while msg.is_none() && !src.is_empty() {
-            if let Ok(tag) = src.decode_varint32() {
+            if let Ok(tag) = src.read_var_u32() {
                 match tag {
                     COMPARATOR => {
-                        if let Ok(s) = src.get_length_prefixed_slice() {
+                        if let Ok(s) = src.read_length_prefixed_slice() {
                             self.comparator = Some(String::from_utf8_lossy(s).to_string());
                         } else {
                             msg = Some(String::from("compation pointer"));
@@ -153,7 +153,7 @@ impl VersionEdit {
                     }
 
                     LOG_NUMBER => {
-                        if let Ok(n) = src.decode_varint64() {
+                        if let Ok(n) = src.read_var_u64() {
                             self.log_number = Some(n);
                         } else {
                             msg = Some(String::from("log number"));
@@ -161,7 +161,7 @@ impl VersionEdit {
                     }
 
                     PREV_LOG_NUMBER => {
-                        if let Ok(n) = src.decode_varint64() {
+                        if let Ok(n) = src.read_var_u64() {
                             self.prev_log_number = Some(n);
                         } else {
                             msg = Some(String::from("prev log number"));
@@ -169,7 +169,7 @@ impl VersionEdit {
                     }
 
                     NEXT_FILE_NUMBER => {
-                        if let Ok(n) = src.decode_varint64() {
+                        if let Ok(n) = src.read_var_u64() {
                             self.next_file_number = Some(n);
                         } else {
                             msg = Some(String::from("next file number"));
@@ -177,7 +177,7 @@ impl VersionEdit {
                     }
 
                     LAST_SEQUENCE => {
-                        if let Ok(n) = src.decode_varint64() {
+                        if let Ok(n) = src.read_var_u64() {
                             self.last_sequence = Some(n);
                         } else {
                             msg = Some(String::from("last sequence"));
@@ -196,7 +196,7 @@ impl VersionEdit {
 
                     DELETED_FILES => {
                         let (level_ret, num_res) =
-                            (get_level(&mut src, &mut level), src.decode_varint64());
+                            (get_level(&mut src, &mut level), src.read_var_u64());
                         if level_ret.is_ok() && num_res.is_ok() {
                             self.deleted_files.push((level, num_res.unwrap()));
                         } else {
@@ -206,8 +206,8 @@ impl VersionEdit {
 
                     NEW_FILE => {
                         let level_res = get_level(&mut src, &mut level);
-                        let num_res = src.decode_varint64();
-                        let size_res = src.decode_varint64();
+                        let num_res = src.read_var_u64();
+                        let size_res = src.read_var_u64();
                         let small_res = get_internal_key(&mut src, &mut file_meta.smallest);
                         let large_res = get_internal_key(&mut src, &mut file_meta.largest);
                         if level_res.is_ok()
@@ -246,7 +246,7 @@ impl VersionEdit {
 }
 
 fn get_level(src: &mut &[u8], level: &mut u32) -> Result<()> {
-    let l = (*src).decode_varint32()?;
+    let l = src.read_var_u32()?;
     if l < NUM_LEVELS as u32 {
         *level = l;
         Ok(())
@@ -258,8 +258,8 @@ fn get_level(src: &mut &[u8], level: &mut u32) -> Result<()> {
 }
 
 fn get_internal_key(src: &mut &[u8], dst: &mut InternalKey) -> Result<()> {
-    let data = (*src).get_length_prefixed_slice()?;
-    if !dst.decode(data.into()) {
+    let data = (*src).read_length_prefixed_slice()?;
+    if !dst.decode(data) {
         Err(Error::Corruption("internal key decode failed".to_string()))
     } else {
         Ok(())

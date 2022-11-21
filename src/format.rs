@@ -1,5 +1,7 @@
+use std::fmt::Debug;
+
 use crate::{
-    codec::{NumberDecoder, NumberEncoder},
+    codec::{NumberReader, NumberWriter},
     types::{SequenceNumber, MAX_SEQUENCE_NUMBER},
     ValueType,
 };
@@ -7,6 +9,14 @@ use crate::{
 #[derive(Default, Clone)]
 pub struct InternalKey {
     rep: Vec<u8>,
+}
+
+impl Debug for InternalKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InternalKey")
+            .field("rep", &self.rep)
+            .finish()
+    }
 }
 
 impl InternalKey {
@@ -57,7 +67,7 @@ impl<'a> ParsedInternalKey<'a> {
         result.extend_from_slice(self.user_key);
         let mut buf = [0u8; 8];
         buf.as_mut()
-            .encode_u64_le(pack_sequence_and_type(self.sequence, self.val_type))
+            .write_u64_le(pack_sequence_and_type(self.sequence, self.val_type))
             .unwrap();
         result.extend_from_slice(&buf);
     }
@@ -66,7 +76,7 @@ impl<'a> ParsedInternalKey<'a> {
         assert!(data.len() >= 8);
         let user_key = &data[0..data.len() - 8];
         let mut buf = data;
-        let tag = buf.decode_u64_le().unwrap();
+        let tag = buf.read_u64_le().unwrap();
         let sequence = tag >> 8;
         let val_type = ValueType::try_from((tag & 0xff) as u8).unwrap();
 
@@ -79,7 +89,7 @@ impl<'a> ParsedInternalKey<'a> {
 }
 
 pub fn extract_user_key(internal_key: &[u8]) -> &[u8] {
-    let internal_key = internal_key.as_ref();
+    let internal_key = internal_key;
     assert!(internal_key.len() >= 8);
     &internal_key[..internal_key.len() - 8]
 }
@@ -88,5 +98,5 @@ pub fn extract_sequence_key<T: AsRef<[u8]>>(internal_key: T) -> u64 {
     let internal_key = internal_key.as_ref();
     assert!(internal_key.len() >= 8);
     let mut buf = &internal_key[internal_key.len() - 8..];
-    buf.decode_u64_le().unwrap()
+    buf.read_u64_le().unwrap()
 }

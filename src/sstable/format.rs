@@ -4,13 +4,11 @@ use integer_encoding::VarInt;
 use snap::read::FrameDecoder;
 
 use crate::{
-    codec::decode_u32_le,
+    codec::Decoder,
     env::RandomAccessFile,
     error::{Error, Result},
     options::{Compress, ReadOption},
 };
-
-use super::block::Block;
 
 pub const FOOTER_LENGTH: usize = 40;
 pub const FULL_FOOTER_LENGTH: usize = FOOTER_LENGTH + 8;
@@ -140,14 +138,14 @@ impl BlockContent {
 
         let data = buf.as_slice();
         if option.verify_checksum {
-            let checksum = decode_u32_le(&data[n + 1..]);
+            let (checksum, _) = data[n + 1..].decode_u32_le()?;
             let mut hasher = crc32fast::Hasher::new();
             hasher.update(&data[0..n + 1]);
             if checksum != hasher.finalize() {
                 return Err(Error::Corruption("block check sum mismatch".into()));
             }
         }
-        let compress_type = Compress::from(data[n]);
+        let compress_type = Compress::try_from(data[n])?;
         match compress_type {
             Compress::NO => {
                 //TODO, how to deal with mmap
@@ -167,7 +165,6 @@ impl BlockContent {
                     data: uncompressed_data,
                 })
             }
-            _ => Err(Error::Corruption("bad block compress type".into())),
         }
     }
 }

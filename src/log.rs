@@ -1,7 +1,7 @@
 use crc::{Crc, CRC_32_ISCSI};
 use std::io::{Cursor, ErrorKind};
 
-use crate::codec::{NumberDecoder, NumberEncoder};
+use crate::codec::{NumberReader, NumberWriter};
 use crate::env::{SequencialFile, WritableFile};
 use crate::error::{Error, Result};
 
@@ -91,9 +91,9 @@ impl<W: WritableFile> LogWriter<W> {
         // let mut header: [u8; HEADER_SIZE] = [0; HEADER_SIZE];
 
         let mut buf = Cursor::new([0; HEADER_SIZE]);
-        buf.encode_u32_le(chksum)?;
-        buf.encode_u16_le(len as u16)?;
-        buf.encode_u8(t as u8)?;
+        buf.write_u32_le(chksum)?;
+        buf.write_u16_le(len as u16)?;
+        buf.write_u8_le(t as u8)?;
 
         self.writer.append(buf.get_ref())?;
         self.writer.append(data)?;
@@ -159,27 +159,19 @@ impl<R: SequencialFile> LogReader<R> {
                 self.blk_off = 0;
             }
             let res = self.file.read_exact(&mut self.head_scratch);
-            if let Err(e) = res.as_ref() {
-                if let Error::IOError { source } = e {
-                    if source.kind() == ErrorKind::UnexpectedEof {
-                        return Ok(None);
-                    }
+            if let Err(err) = res.as_ref() {
+                if err.kind() == ErrorKind::UnexpectedEof {
+                    return Ok(None);
                 }
             }
             res?;
 
             self.blk_off += HEADER_SIZE;
 
-            let mut buf = Cursor::new(self.head_scratch);
-
-            // let mut data = [..];
-            let checksum = buf.decode_u32_le()?;
-            let length = buf.decode_i16_le()?;
-            let record_type = buf.decode_u8()?;
-
-            // let checksum = data.read_u32::<LittleEndian>()?;
-            // let length = data.read_u16::<LittleEndian>()?;
-            // let r#type = data.read_u8()?;
+            let mut buf = &self.head_scratch[..];
+            let checksum = buf.read_u32_le()?;
+            let length = buf.read_i16_le()?;
+            let record_type = buf.read_u8_le()?;
 
             dst.resize(dst_offset + length as usize, 0);
 

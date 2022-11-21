@@ -96,7 +96,7 @@ impl BlockBuilder {
     pub fn finish(mut self) -> Vec<u8> {
         self.buffer.reserve(self.restarts.len() * 4 + 4);
         for r in self.restarts.iter() {
-            self.buffer.write_fixedint(*r as u32).unwrap();
+            self.buffer.write_fixedint(*r).unwrap();
         }
         self.buffer
             .write_fixedint(self.restarts.len() as u32)

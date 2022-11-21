@@ -9,13 +9,14 @@ use std::thread;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 
 use crate::builder::build_table;
-use crate::cmp::InternalKeyComparator;
+use crate::cmp::{Comparator, InternalKeyComparator};
 use crate::env::WritableFile;
 use crate::error::{Error, Result};
 use crate::filenames::{
     current_file_name, descriptor_file_name, log_file_name, parse_file_name, set_current_file,
     FileType,
 };
+use crate::iterator::DBIterator;
 use crate::options::{ReadOption, WriteOption};
 use crate::table_cache::TableCache;
 use crate::types::SequenceNumber;
@@ -23,7 +24,7 @@ use crate::version::{FileMetaData, Version};
 use crate::version_edit::VersionEdit;
 use crate::version_set::VersionSet;
 use crate::{env::Env, options::Options, write_batch::WriteBatch};
-use crate::{LogReader, LogWriter, LookupKey, MemTable, ValueType};
+use crate::{Forward, LogReader, LogWriter, MemTable};
 
 pub struct LevelDB<E: Env> {
     inner: Arc<DBImplInner<E>>,
@@ -73,13 +74,17 @@ impl<E: Env> LevelDB<E> {
         thread::Builder::new()
             .name("compaction".to_string())
             .spawn(move || {
-                while let Ok(_) = inner.compaction_trigger.1.recv() {
+                while inner.compaction_trigger.1.recv().is_ok() {
                     if inner.shutdown.load(Ordering::Acquire) {
                         break;
                     }
                 }
             })
             .unwrap();
+    }
+
+    pub fn debug_print(&self) {
+        self.inner.debug_print();
     }
 }
 
@@ -102,7 +107,7 @@ struct Writer {
 
 enum BatchTask {
     Write(Writer),
-    close,
+    Close,
 }
 
 pub struct DBImplInner<E: Env> {
@@ -164,12 +169,12 @@ impl<E: Env> DBImplInner<E> {
         }
     }
 
-    fn make_room_for_write(&self, force: bool) {
-        let mut allow_delay = !force;
-        let mut versions = self.versions.lock().unwrap();
-        loop {
-            // process error
-        }
+    fn make_room_for_write(&self, _force: bool) {
+        // let mut allow_delay = !force;
+        // let mut versions = self.versions.lock().unwrap();
+        // loop {
+        //     // process error
+        // }
     }
 
     pub fn write(&self, options: &WriteOption, updates: Option<WriteBatch>) -> Result<()> {
@@ -193,7 +198,7 @@ impl<E: Env> DBImplInner<E> {
 
     pub fn recovery(&self, edit: &mut VersionEdit, save_manifest: &mut bool) -> Result<()> {
         let db_path = Path::new(&self.db_name);
-        let _ = self.env.create_dir(&db_path);
+        let _ = self.env.create_dir(db_path);
         if !self.env.file_exists(&current_file_name(db_path)) {
             if self.options.create_if_missing {
                 self.new_db()?;
@@ -211,7 +216,7 @@ impl<E: Env> DBImplInner<E> {
         let min_log = versions.log_number();
         let prev_log = versions.prev_log_number();
         let mut file_names = Vec::new();
-        self.env.get_children(&db_path, &mut file_names)?;
+        self.env.get_children(db_path, &mut file_names)?;
         let mut expect = HashSet::new();
         versions.live_files(&mut expect);
 
@@ -225,9 +230,7 @@ impl<E: Env> DBImplInner<E> {
             }
         }
         if !expect.is_empty() {
-            return Err(Error::Corruption(
-                format!("missing files: {:?}", expect).into(),
-            ));
+            return Err(Error::Corruption(format!("missing files: {:?}", expect)));
         }
         drop(versions);
 
@@ -244,7 +247,7 @@ impl<E: Env> DBImplInner<E> {
         }
 
         let mut versions = self.versions.lock().unwrap();
-        if logs.len() > 0 {
+        if !logs.is_empty() {
             versions.mark_file_number_used(*logs.last().unwrap());
         }
         if versions.last_sequence() < max_sequence {
@@ -269,14 +272,14 @@ impl<E: Env> DBImplInner<E> {
         let mut mem = None;
 
         let buffer_size = self.options.write_buffer_size;
-        let paranoid_checks = self.options.paranoid_checks;
+        // let paranoid_checks = self.options.paranoid_checks;
         let mut compaction = 0;
         loop {
             let mut batch = WriteBatch::new();
             let mut record = Vec::with_capacity(1024);
 
             //finish read
-            if log_reader.read_record(&mut record)? == None {
+            if log_reader.read_record(&mut record)?.is_none() {
                 break;
             };
 
@@ -330,19 +333,20 @@ impl<E: Env> DBImplInner<E> {
         Ok(())
     }
 
-    pub fn get(&self, option: &ReadOption, key: &[u8], value: &mut Vec<u8>) -> Result<()> {
-        let snapshot = self.versions.lock().unwrap().last_sequence();
-        let lookup_key = LookupKey::new(key, snapshot, ValueType::Value);
-        let memtable = self.mem.read().unwrap().as_ref().unwrap();
+    pub fn get(&self, _option: &ReadOption, _key: &[u8], _value: &mut [u8]) -> Result<()> {
+        // let snapshot = self.versions.lock().unwrap().last_sequence();
+        // let lookup_key = LookupKey::new(key, snapshot, ValueType::Value);
+        // let memtable = self.mem.read().unwrap().as_ref().unwrap();
         // if let Some(v) = memtable.
-        Ok(())
+        // Ok(())
+        todo!()
     }
 
     fn write_inner(&self, batch: &mut WriteBatch, options: &WriteOption) -> Result<()> {
         let versions: std::sync::MutexGuard<VersionSet<E>> = self.versions.lock().unwrap();
-        let mut last_sequence = versions.last_sequence();
+        let last_sequence = versions.last_sequence();
         batch.set_sequence(last_sequence + 1);
-        last_sequence += batch.count() as u64;
+        // last_sequence += batch.count() as u64;
         drop(versions);
 
         let mut wal = self.wal.lock().unwrap();
@@ -365,7 +369,8 @@ impl<E: Env> DBImplInner<E> {
     }
 
     pub fn write_batch_task(&mut self) {
-        let mut queue = self.batch_write_queue.lock().unwrap();
+        // let mut queue = self.batch_write_queue.lock().unwrap();
+        todo!();
     }
 
     pub fn delete_obsoleted_files(&self) {}
@@ -377,8 +382,10 @@ impl<E: Env> DBImplInner<E> {
         base: Option<Arc<Version<E>>>,
     ) -> Result<()> {
         let mut versions = self.versions.lock().unwrap();
-        let mut meta = FileMetaData::default();
-        meta.number = versions.new_file_number();
+        let mut meta = FileMetaData {
+            number: versions.new_file_number(),
+            ..Default::default()
+        };
         versions.pending_outputs.insert(meta.number);
         drop(versions);
 
@@ -425,7 +432,7 @@ impl<E: Env> DBImplInner<E> {
     }
 
     pub fn compaction_memtable(&self) {
-        if let Err(e) = self.do_compaction_memtable() {
+        if self.do_compaction_memtable().is_err() {
             //TODO
             panic!("error in compaction table");
         }
@@ -436,7 +443,7 @@ impl<E: Env> DBImplInner<E> {
         let mut edit = VersionEdit::default();
         let current = self.versions.lock().unwrap().current();
 
-        self.write_level0_table(imm, &mut edit, current);
+        self.write_level0_table(imm, &mut edit, current)?;
         if self.shutdown.load(Ordering::Acquire) {
             return Err(Error::CustomError(
                 "deleting db during memtable compaction".into(),
@@ -484,6 +491,24 @@ impl<E: Env> DBImplInner<E> {
         }
         res
     }
+
+    pub fn new_internal_iterator(&self, _options: ReadOption) {}
+
+    pub fn debug_print(&self) {
+        println!("{:#?}", self.versions);
+    }
+}
+
+pub struct DBIter<E: Env> {
+    db: Arc<DBImplInner<E>>,
+    user_comparator: Arc<dyn Comparator>,
+    iter: Box<dyn DBIterator>,
+    sequence: SequenceNumber,
+    status: Option<Error>,
+    saved_key: Vec<u8>,
+    saved_value: Vec<u8>,
+    direction: Forward,
+    valid: bool,
 }
 
 #[cfg(test)]
@@ -499,7 +524,10 @@ mod tests {
         let db_name = "demo";
         let env = PosixEnv {};
         let db = LevelDB::open(options, db_name, env).unwrap();
-
-        db.write("liu".as_bytes(), "zhong".as_bytes());
+        for i in 0..20 {
+            let key = format!("liu{}", i);
+            eprintln!("{} {:?}", i, key.as_bytes());
+            db.write(key.as_bytes(), "zhong".as_bytes()).unwrap();
+        }
     }
 }

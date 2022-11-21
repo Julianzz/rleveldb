@@ -3,6 +3,8 @@ use std::{io, result, string::FromUtf8Error};
 use crossbeam::channel::RecvError;
 use thiserror::Error;
 
+use crate::env;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("data store disconnected")]
@@ -18,8 +20,13 @@ pub enum Error {
     #[error("io read error")]
     IOError {
         #[from]
-        source: io::Error,
+        source: env::IoError,
         // backtrace: Backtrace,
+    },
+    #[error("format error ")]
+    FormatError {
+        #[from]
+        source: io::Error,
     },
 
     #[error("error in receive from channel")]

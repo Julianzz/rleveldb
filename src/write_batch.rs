@@ -1,11 +1,11 @@
-use std::{fmt::Write, sync::Arc};
+use std::sync::Arc;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use bytes::Buf;
 use integer_encoding::VarIntWriter;
 
 use crate::{
-    codec::{decode_value, NumberDecoder},
+    codec::{Decoder, NumberReader, VarLengthSliceReader},
     error::{Error, Result},
     types::SequenceNumber,
     MemTable, ValueType,
@@ -22,7 +22,7 @@ impl WriteBatch {
             rep: vec![0; HEAD_SIZE],
         }
     }
-    
+
     pub fn set_sequence(&mut self, seq: SequenceNumber) {
         self.rep
             .as_mut_slice()
@@ -75,7 +75,7 @@ impl WriteBatch {
 
     pub fn sequence(&self) -> SequenceNumber {
         let mut buf = &self.rep[..8];
-        buf.decode_u64_le().unwrap()
+        buf.read_u64_le().unwrap()
     }
 
     pub fn mut_content(&mut self) -> &mut Vec<u8> {
@@ -86,7 +86,6 @@ impl WriteBatch {
     }
     pub fn set_content(&mut self, content: Vec<u8>) {
         self.rep = content;
-        // self.rep.extend_from_slice(&content);
     }
 
     pub fn iterate<H: Handler>(&self, mut handler: H) -> Result<()> {
@@ -98,23 +97,18 @@ impl WriteBatch {
         }
         buf.advance(HEAD_SIZE);
         let mut found = 0;
-        let mut offset = 0;
-        while offset < buf.len() {
-            let tag = ValueType::try_from(buf[offset])?;
-            offset += 1;
+        while buf.is_empty() {
+            let tag = ValueType::try_from(buf.read_u8_le()?)?;
             found += 1;
             match tag {
                 ValueType::Deletetion => {
-                    let (key, key_offset) = decode_value(&buf[offset..])?;
+                    let key = buf.read_length_prefixed_slice()?;
                     handler.delete(key);
-                    offset += key_offset;
                 }
                 ValueType::Value => {
-                    // let key_size = buf.decode_u32_le()?;
-                    let (key, key_offset) = decode_value(&buf[offset..])?;
-                    offset += key_offset;
-                    let (value, value_offset) = decode_value(&buf[offset..])?;
-                    offset += value_offset;
+                    let (key, key_offset) = buf.decode_length_prefix_slice()?;
+                    let (value, value_offset) = buf[key_offset..].decode_length_prefix_slice()?;
+                    buf.advance(value_offset + value_offset);
                     handler.put(key, value);
                 }
             }
@@ -129,7 +123,7 @@ impl WriteBatch {
     pub fn insert_into(&self, mem: Arc<MemTable>) -> Result<()> {
         let inserter = MemtableInserter {
             sequence: self.sequence(),
-            mem: mem,
+            mem,
         };
         self.iterate(inserter)
     }

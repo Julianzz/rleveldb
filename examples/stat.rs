@@ -6,8 +6,5 @@ fn main() {
     let db_name = "demo";
     let env = PosixEnv {};
     let db = LevelDB::open(options, db_name, env).unwrap();
-    for i in 0..20 {
-        db.write(format!("liu{}", i).as_bytes(), "zhong".as_bytes())
-            .unwrap();
-    }
+    db.debug_print();
 }

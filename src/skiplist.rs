@@ -67,8 +67,8 @@ impl<T: Default + AsRef<[u8]>> SkipList<T> {
         let mut current = head;
         loop {
             let next = unsafe { (*current).next.as_ref() };
-            if next.is_some() {
-                current = next.unwrap().as_ref() as *const Node<T>;
+            if let Some(n) = next {
+                current = n.as_ref() as *const Node<T>;
             } else {
                 if level == 0 {
                     if current == head {
@@ -162,9 +162,10 @@ impl<T: Default + AsRef<[u8]>> SkipList<T> {
         loop {
             unsafe {
                 if let Some(next) = (*current).skips[level] {
-                    let ord = self.comparator.compare((*next).key.as_ref(), &bytes);
-
+                    let next_key = (*next).key.as_ref();
+                    let ord = self.comparator.compare(next_key, bytes);
                     assert!(ord != Ordering::Equal);
+
                     if ord == Ordering::Less {
                         current = next;
                         continue;

@@ -1,9 +1,10 @@
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     cmp::{BitWiseComparator, Comparator},
+    error::Error,
     filter::FilterPolicy,
-    table::block::Block,
+    sstable::block::Block,
     utils::cache::Cache,
 };
 
@@ -19,12 +20,13 @@ impl Compress {
     }
 }
 
-impl From<u8> for Compress {
-    fn from(v: u8) -> Self {
-        match v {
-            0x0 => Self::NO,
-            0x1 => Self::Snappy,
-            _ => panic!("unknow compress type"),
+impl TryFrom<u8> for Compress {
+    type Error = Error;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x0 => Ok(Self::NO),
+            0x1 => Ok(Self::Snappy),
+            _ => Err(Error::Corruption("unknow compress type".into())),
         }
     }
 }
@@ -70,7 +72,7 @@ impl Default for Options {
     }
 }
 
-#[derive(Clone,Default)]
+#[derive(Clone, Default)]
 pub struct ReadOption {
     pub verify_checksum: bool,
     pub fill_cache: bool,

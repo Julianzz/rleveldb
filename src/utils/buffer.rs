@@ -26,7 +26,7 @@ impl<'a> BufferReader for &'a [u8] {
     }
 
     fn read_bytes(&mut self, count: usize) -> Result<&[u8]> {
-        if unsafe { unlikely(self.len() < count) } {
+        if unlikely(self.len() < count) {
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF").into());
         }
         let (left, right) = self.split_at(count);
@@ -60,18 +60,18 @@ impl<'a> BufferWriter for &'a mut [u8] {
 
     #[inline]
     unsafe fn advance_mut(&mut self, count: usize) {
-        let original_self = std::mem::replace(self, &mut []);
+        let original_self = std::mem::take(self);
         *self = &mut original_self[count..];
     }
 
     fn write_bytes(&mut self, values: &[u8]) -> Result<()> {
         let write_len = values.len();
-        if unsafe { unlikely(self.len() < write_len) } {
+        if unlikely(self.len() < write_len) {
             return Err(
                 io::Error::new(io::ErrorKind::UnexpectedEof, "buffer not long enough").into(),
             );
         }
-        let original_self = std::mem::replace(self, &mut []);
+        let original_self = std::mem::take(self);
         original_self[..write_len].copy_from_slice(values);
         *self = &mut original_self[write_len..];
         Ok(())

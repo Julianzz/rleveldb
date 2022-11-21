@@ -1,23 +1,26 @@
-use rand::seq::index;
-
 use crate::{
     cmp::{Comparator, InternalKeyComparator},
     consts::{MAX_MEM_COMPACT_LEVEL, NUM_LEVELS},
     env::Env,
+    error::Result,
     format::InternalKey,
+    iterator::DBIterator,
     options::Options,
+    sstable::{two_level_iterator::TwoLevelIterator, Table},
     table_cache::TableCache,
     types::MAX_SEQUENCE_NUMBER,
     version_edit::VersionEdit,
-    ValueType,
+    version_set::{LevelFileNumIterator, LevelTableIterBuilder},
+    ReadOption, ValueType,
 };
 use std::{
     cmp::Ordering,
     collections::HashSet,
+    fmt::Debug,
     sync::{Arc, RwLock},
 };
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct FileMetaData {
     pub allowed_seeks: i32,
     pub number: u64,
@@ -26,7 +29,7 @@ pub struct FileMetaData {
     pub largest: InternalKey,
 }
 
-pub struct Version<E: Env> {
+pub struct Version<E> {
     pub table_cache: TableCache<E>,
     pub options: Arc<Options>,
     pub files: [Vec<Arc<FileMetaData>>; NUM_LEVELS],
@@ -34,6 +37,17 @@ pub struct Version<E: Env> {
     pub cmp: InternalKeyComparator,
     pub compaction_score: f64,
     pub compaction_level: i32,
+}
+
+impl<E> Debug for Version<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Version")
+            .field("files", &self.files)
+            // .field("file_to_compact", &self.file_to_compact)
+            .field("compaction_score", &self.compaction_score)
+            .field("compaction_level", &self.compaction_level)
+            .finish()
+    }
 }
 
 impl<E: Env> Version<E> {
@@ -76,20 +90,20 @@ impl<E: Env> Version<E> {
         while i < self.files[level].len() {
             let f = &self.files[level][i];
             i += 1;
-            if !self.before_file(&user_cmp, &user_end, &f)
-                && !self.after_file(&user_cmp, &user_begin, &f)
+            if !self.before_file(&user_cmp, &user_end, f)
+                && !self.after_file(&user_cmp, &user_begin, f)
             {
                 input.push(f.clone());
                 if level == 0 {
                     if begin.is_some()
-                        && user_cmp.compare(&f.smallest.user_key(), user_begin.as_ref().unwrap())
+                        && user_cmp.compare(f.smallest.user_key(), user_begin.as_ref().unwrap())
                             == Ordering::Less
                     {
                         i = 0;
                         input.clear();
                         user_begin = user_begin.map(|_| f.smallest.user_key());
                     } else if end.is_some()
-                        && user_cmp.compare(&f.largest.user_key(), user_end.as_ref().unwrap())
+                        && user_cmp.compare(f.largest.user_key(), user_end.as_ref().unwrap())
                             == Ordering::Greater
                     {
                         i = 0;
@@ -184,7 +198,7 @@ impl<E: Env> Version<E> {
         file: &Arc<FileMetaData>,
     ) -> bool {
         if let &Some(key) = user_key {
-            ucmp.compare(key, &file.smallest.user_key()) == Ordering::Less
+            ucmp.compare(key, file.smallest.user_key()) == Ordering::Less
         } else {
             false
         }
@@ -205,7 +219,7 @@ impl<E: Env> Version<E> {
     fn find_file(
         &self,
         icmp: &InternalKeyComparator,
-        files: &Vec<Arc<FileMetaData>>,
+        files: &[Arc<FileMetaData>],
         key: &[u8],
     ) -> usize {
         match files.binary_search_by(|f| icmp.compare(key, f.largest.encode())) {
@@ -216,13 +230,42 @@ impl<E: Env> Version<E> {
 
     pub fn level_total_file_size(&self, level: usize) -> u64 {
         assert!(level < NUM_LEVELS);
-        self.files[level]
-            .iter()
-            .map(|m| m.file_size)
-            .fold(0, |acc, i| acc + i)
+        self.files[level].iter().map(|m| m.file_size).sum()
     }
-    pub fn total_file_size(files: &Vec<Arc<FileMetaData>>) -> u64 {
-        files.iter().map(|m| m.file_size).fold(0, |acc, i| acc + i)
+    pub fn total_file_size(files: &[Arc<FileMetaData>]) -> u64 {
+        files.iter().map(|m| m.file_size).sum()
+    }
+
+    pub fn new_concat_iter(
+        &self,
+        option: &ReadOption,
+        level: usize,
+    ) -> TwoLevelIterator<LevelFileNumIterator, LevelTableIterBuilder<E>> {
+        let files = self.files.get(level).unwrap();
+        let index_iter = LevelFileNumIterator::new(self.cmp.clone(), files.clone());
+        let builder = LevelTableIterBuilder {
+            table_cache: self.table_cache.clone(),
+        };
+        TwoLevelIterator::new(index_iter, builder, option.clone())
+    }
+
+    pub fn add_iterators(
+        &self,
+        option: &ReadOption,
+        iters: &mut Vec<Box<dyn DBIterator>>,
+    ) -> Result<()> {
+        for file in self.files[0].iter() {
+            let table = self.table_cache.find_table(file.number, file.file_size)?;
+            let iter = Table::iter(table, option);
+            iters.push(Box::new(iter));
+        }
+
+        for i in 1..self.files.len() {
+            let iter = self.new_concat_iter(option, i);
+            iters.push(Box::new(iter));
+        }
+
+        Ok(())
     }
 }
 
@@ -288,14 +331,16 @@ impl<E: Env> VersionBuilder<E> {
         }
         for level in 0..NUM_LEVELS {
             let mut base_iter = self.base.files[level].iter().peekable();
-            let mut add_iter = self.added_files[level].iter().peekable();
-            while let Some(add_file) = add_iter.next() {
+            let add_iter = self.added_files[level].iter().peekable();
+            for add_file in add_iter {
                 while let Some(&base_file) = base_iter.peek() {
                     if icmp.compare(base_file.smallest.encode(), add_file.smallest.encode())
                         == Ordering::Less
                     {
                         self.maybe_add_file(version, level, base_file.clone());
                         base_iter.next();
+                    } else {
+                        break;
                     }
                 }
                 self.maybe_add_file(version, level, add_file.clone());
@@ -312,14 +357,14 @@ impl<E: Env> VersionBuilder<E> {
         let last = &mut version.files[level].last();
 
         //check last order
-        let check_last = last
-            .map(|f| {
-                self.icmp
-                    .compare(f.largest.encode(), file_meta.smallest.encode())
-                    == Ordering::Less
-            })
-            .unwrap_or(true);
-        assert!(level != 0 || check_last);
+        if level != 0 && last.is_some() {
+            let check_last = self
+                .icmp
+                .compare(last.unwrap().largest.encode(), file_meta.smallest.encode())
+                == Ordering::Less;
+
+            assert!(check_last);
+        }
 
         version.files[level].push(file_meta);
     }

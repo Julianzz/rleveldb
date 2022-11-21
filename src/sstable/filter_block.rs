@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    codec::{NumberDecoder, NumberEncoder},
+    codec::{NumberReader, NumberWriter},
     filter::FilterPolicy,
     slice::UnsafeSlice,
 };
@@ -21,7 +21,7 @@ pub struct FilterBlockBuilder {
 impl FilterBlockBuilder {
     pub fn new(policy: Arc<dyn FilterPolicy>) -> Self {
         FilterBlockBuilder {
-            policy: policy,
+            policy,
             keys: Vec::new(),
             start: Vec::new(),
             result: Vec::new(),
@@ -51,10 +51,10 @@ impl FilterBlockBuilder {
 
         let array_size = self.result.len();
         for offset in self.filter_offset.iter() {
-            self.result.encode_u32_le(*offset as u32).unwrap();
+            self.result.write_u32_le(*offset as u32).unwrap();
         }
 
-        self.result.encode_u32_le(array_size as u32).unwrap();
+        self.result.write_u32_le(array_size as u32).unwrap();
         self.result.push(FILTER_BASE_LG as u8);
 
         self.result
@@ -106,7 +106,7 @@ impl<'a> FilterBlockReader<'a> {
         }
 
         reader.base_lg = data[n - 1] as usize;
-        let last_word = data[n - 5..].as_ref().decode_u32_le().unwrap() as usize;
+        let last_word = data[n - 5..].as_ref().read_u32_le().unwrap() as usize;
         if last_word > n - 5 {
             return reader;
         }
@@ -120,11 +120,11 @@ impl<'a> FilterBlockReader<'a> {
         if index < self.num {
             let start = self.data[self.offset + index * 4..]
                 .as_ref()
-                .decode_u32_le()
+                .read_u32_le()
                 .unwrap();
             let limit = self.data[self.offset + index * 4 + 4..]
                 .as_ref()
-                .decode_u32_le()
+                .read_u32_le()
                 .unwrap();
 
             if start <= limit && limit <= self.offset as u32 {

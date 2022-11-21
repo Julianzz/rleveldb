@@ -1,11 +1,11 @@
+use crate::{
+    codec::VarintReader,
+    format::{extract_sequence_key, extract_user_key},
+};
+
 use std::{
     cmp::{self, Ordering},
     sync::Arc,
-};
-
-use crate::{
-    codec::DecodeVarint,
-    format::{extract_sequence_key, extract_user_key},
 };
 
 pub trait Comparator {
@@ -23,8 +23,6 @@ pub struct BitWiseComparator {}
 
 impl Comparator for BitWiseComparator {
     fn compare(&self, left: &[u8], right: &[u8]) -> Ordering {
-        let left = left.as_ref();
-        let right = right.as_ref();
         left.cmp(right)
     }
 
@@ -33,7 +31,6 @@ impl Comparator for BitWiseComparator {
     }
 
     fn find_shortest_separator(&self, start: &mut Vec<u8>, limit: &[u8]) {
-        let limit = limit.as_ref();
         let min_length = cmp::min(start.len(), limit.len());
         let mut diff_index = 0;
         while diff_index < min_length && limit[diff_index] == start[diff_index] {
@@ -50,7 +47,7 @@ impl Comparator for BitWiseComparator {
 
     fn find_shortest_successor(&self, key: &mut Vec<u8>) {
         let mut truncate_len = 0;
-        for (i, byte) in key.iter_mut().enumerate() {
+        for (_, byte) in key.iter_mut().enumerate() {
             if *byte != 0xff {
                 *byte += 1;
                 truncate_len += 1;
@@ -88,8 +85,8 @@ impl Comparator for InternalKeyComparator {
         let right_key = extract_user_key(right);
         match self.user_comparator.compare(left_key, right_key) {
             Ordering::Less => Ordering::Less,
-            Ordering::Equal => Ordering::Greater,
-            Ordering::Greater => {
+            Ordering::Greater => Ordering::Greater,
+            Ordering::Equal => {
                 let left_seq = extract_sequence_key(left);
                 let right_seq = extract_sequence_key(right);
                 right_seq.cmp(&left_seq)
@@ -101,11 +98,11 @@ impl Comparator for InternalKeyComparator {
         "leveldb.InternalKeyComparator"
     }
 
-    fn find_shortest_separator(&self, start: &mut Vec<u8>, limit: &[u8]) {
+    fn find_shortest_separator(&self, _start: &mut Vec<u8>, _limit: &[u8]) {
         todo!()
     }
 
-    fn find_shortest_successor(&self, key: &mut Vec<u8>) {
+    fn find_shortest_successor(&self, _key: &mut Vec<u8>) {
         todo!()
     }
 }
@@ -124,7 +121,7 @@ impl Comparator for KeyComparator {
     fn compare(&self, left: &[u8], right: &[u8]) -> Ordering {
         let left_key = get_length_prefixed_slice(left);
         let right_key = get_length_prefixed_slice(right);
-        self.comparator.compare(&left_key, &right_key)
+        self.comparator.compare(left_key, right_key)
     }
 
     fn name(&self) -> &'static str {
@@ -141,9 +138,9 @@ impl Comparator for KeyComparator {
 }
 
 pub fn get_length_prefixed_slice(mut buf: &[u8]) -> &[u8] {
-    let len = buf.decode_varint32().unwrap();
+    let len = buf.read_var_u32().unwrap();
     // assert!(len as usize == buf.len());
-    &buf[..len as usize ]
+    &buf[..len as usize]
 }
 
 #[cfg(test)]
@@ -198,7 +195,7 @@ mod tests {
 
     #[test]
     fn test_bit_wise_comparator_cmp() {
-        let tests: Vec<(&[u8], &[u8], Ordering)> = vec![
+        let _tests: Vec<(&[u8], &[u8], Ordering)> = vec![
             (
                 &[1u8, 2u8, 3u8, 4u8, 5u8],
                 &[1u8, 2u8, 3u8, 4u8, 6u8],
