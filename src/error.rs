@@ -48,9 +48,3 @@ pub enum Error {
 }
 
 pub type Result<T> = result::Result<T, Error>;
-
-// impl From<io::Error> for Error {
-//     fn from(e: io::Error) -> Self {
-//         Error::IOError(e)
-//     }
-// }

@@ -104,8 +104,43 @@ impl Env for PosixEnv {
 
 #[cfg(test)]
 mod tests {
+    use tempdir::TempDir;
+
     use super::*;
 
     #[test]
-    fn test_create_link_file() {}
+    fn test_create_get_children() {
+        let env = PosixEnv {};
+        let file_names = &mut ["demo", "demo2", "demo4"];
+        file_names.sort();
+
+        let tmp_dir = TempDir::new("example").unwrap();
+        for file_name in file_names.iter() {
+            let file_path = tmp_dir.path().join(*file_name);
+            let mut file = env.new_writable_file(&file_path).unwrap();
+            file.append(file_name.as_bytes()).unwrap()
+        }
+        let mut files = Vec::new();
+        env.get_children(tmp_dir.path(), &mut files).unwrap();
+        files.sort();
+
+        assert_eq!(files.len(), file_names.len());
+        assert!(files.iter().zip(file_names.iter()).map(|(f, s)| f == *s).all(|t|t));
+
+        for file_name in file_names.iter() {
+            let file_path = tmp_dir.path().join(*file_name);
+            assert!(env.file_exists(&file_path));
+
+            let mut file = env.new_sequential_file(&file_path).unwrap();
+            let mut content = String::new();
+            file.read_to_string(&mut content).unwrap();
+
+            assert_eq!(content,*file_name );
+        }
+
+        
+
+
+
+    }
 }

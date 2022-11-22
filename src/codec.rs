@@ -1,12 +1,10 @@
 use crate::error::{Error, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-// pub use integer_encoding::{VarInt,FixedInt};
 use std::{
     intrinsics::unlikely,
     io::{Read, Write},
 };
 
-// const MASK: u32 = 128;
 const MASK: u32 = 0b1000_0000;
 
 pub trait NumberWriter: Write {

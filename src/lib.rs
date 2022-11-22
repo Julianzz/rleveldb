@@ -29,6 +29,7 @@ mod version_edit;
 mod version_set;
 mod write_batch;
 mod merge;
+mod datadriven;
 
 pub use db_impl::LevelDB;
 pub use log::{LogReader, LogWriter};
