@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     cmp::Comparator,
-    codec::{NumberWriter, VarintWriter},
+    codec::{NumberWriter, VarIntWriter},
 };
 
 pub struct BlockBuilder {

@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use crate::{
-    codec::{self, VarintReader, VarintWriter},
+    codec::{self, VarIntReader, VarIntWriter},
     consts::NUM_LEVELS,
     error::{Error, Result},
     format::InternalKey,
@@ -142,7 +142,7 @@ impl VersionEdit {
         let mut key = InternalKey::default();
 
         while msg.is_none() && !src.is_empty() {
-            if let Ok(tag) = src.read_var_u32() {
+            if let Ok((tag,_)) = src.read_var_u32() {
                 match tag {
                     COMPARATOR => {
                         if let Ok(s) = codec::read_length_prefixed_slice(&mut src) {
@@ -153,7 +153,7 @@ impl VersionEdit {
                     }
 
                     LOG_NUMBER => {
-                        if let Ok(n) = src.read_var_u64() {
+                        if let Ok((n,_)) = src.read_var_u64() {
                             self.log_number = Some(n);
                         } else {
                             msg = Some(String::from("log number"));
@@ -161,7 +161,7 @@ impl VersionEdit {
                     }
 
                     PREV_LOG_NUMBER => {
-                        if let Ok(n) = src.read_var_u64() {
+                        if let Ok((n,_)) = src.read_var_u64() {
                             self.prev_log_number = Some(n);
                         } else {
                             msg = Some(String::from("prev log number"));
@@ -169,7 +169,7 @@ impl VersionEdit {
                     }
 
                     NEXT_FILE_NUMBER => {
-                        if let Ok(n) = src.read_var_u64() {
+                        if let Ok((n,_)) = src.read_var_u64() {
                             self.next_file_number = Some(n);
                         } else {
                             msg = Some(String::from("next file number"));
@@ -177,7 +177,7 @@ impl VersionEdit {
                     }
 
                     LAST_SEQUENCE => {
-                        if let Ok(n) = src.read_var_u64() {
+                        if let Ok((n,_)) = src.read_var_u64() {
                             self.last_sequence = Some(n);
                         } else {
                             msg = Some(String::from("last sequence"));
@@ -198,7 +198,7 @@ impl VersionEdit {
                         let (level_ret, num_res) =
                             (get_level(&mut src, &mut level), src.read_var_u64());
                         if level_ret.is_ok() && num_res.is_ok() {
-                            self.deleted_files.push((level, num_res.unwrap()));
+                            self.deleted_files.push((level, num_res.unwrap().0));
                         } else {
                             msg = Some(String::from("deleted files"));
                         }
@@ -216,8 +216,8 @@ impl VersionEdit {
                             && small_res.is_ok()
                             && large_res.is_ok()
                         {
-                            file_meta.number = num_res.unwrap();
-                            file_meta.file_size = size_res.unwrap();
+                            file_meta.number = num_res.unwrap().0;
+                            file_meta.file_size = size_res.unwrap().0;
                             self.new_files.push((level, file_meta.clone()))
                         } else {
                             msg = Some(String::from("new files"));
@@ -246,7 +246,7 @@ impl VersionEdit {
 }
 
 fn get_level(src: &mut &[u8], level: &mut u32) -> Result<()> {
-    let l = src.read_var_u32()?;
+    let (l,_) = src.read_var_u32()?;
     if l < NUM_LEVELS as u32 {
         *level = l;
         Ok(())

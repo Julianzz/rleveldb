@@ -5,7 +5,7 @@ use bytes::Buf;
 // use integer_encoding::VarIntWriter;
 
 use crate::{
-    codec::{self, NumberReader, VarintWriter},
+    codec::{self, NumberReader, VarIntWriter},
     error::{Error, Result},
     types::SequenceNumber,
     MemTable, ValueType,

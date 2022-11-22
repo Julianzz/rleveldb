@@ -3,7 +3,7 @@ use super::{Env, IoResult, RandomAccessFile, SequencialFile, WritableFile};
 use std::os::unix::fs::FileExt;
 use std::{
     fs::{self, File},
-    io::{self, Read, Write},
+    io::{Read, Write},
     path::Path,
 };
 pub struct PosixFile(File);

@@ -1,5 +1,5 @@
 use crate::{
-    codec::VarintReader,
+    codec::VarIntReader,
     format::{extract_sequence_key, extract_user_key},
 };
 
@@ -138,7 +138,7 @@ impl Comparator for KeyComparator {
 }
 
 pub fn get_length_prefixed_slice(mut buf: &[u8]) -> &[u8] {
-    let len = buf.read_var_u32().unwrap();
+    let (len,_) = buf.read_var_u32().unwrap();
     // assert!(len as usize == buf.len());
     &buf[..len as usize]
 }

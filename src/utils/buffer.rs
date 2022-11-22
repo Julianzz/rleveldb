@@ -25,7 +25,7 @@ impl<'a> BufferReader for &'a [u8] {
         *self = &self[count..]
     }
 
-    fn read_bytes(&mut self, count: usize) -> Result<&[u8]> {
+    fn read_bytes(&mut self, count: usize) -> Result<&'a [u8]> {
         if unlikely(self.len() < count) {
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF").into());
         }

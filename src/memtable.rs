@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     cmp::{Comparator, InternalKeyComparator, KeyComparator},
-    codec::{self, NumberReader, NumberWriter, VarInt, VarintReader, VarintWriter},
+    codec::{self, NumberReader, NumberWriter, VarIntReader, VarIntWriter},
     error::{Error, Result},
     iterator::DBIterator,
     skiplist::{SkipList, SkipListIter},
@@ -51,7 +51,10 @@ impl MemTable {
 
         let key_size = key.len() + 8;
         let value_size = value.len();
-        let size = key_size + value_size + key_size.required_space() + value_size.required_space();
+        let size = key_size
+            + value_size
+            + codec::required_space(key_size as u64)
+            + codec::required_space(value_size as u64);
 
         let mut buf = Vec::with_capacity(size);
         buf.write_var_u32(key_size as u32).unwrap();
@@ -75,7 +78,7 @@ impl MemTable {
         if iter.valid() {
             let mut seek_key = iter.key();
 
-            let internal_key_len = seek_key.read_var_u32().unwrap();
+            let (internal_key_len,_) = seek_key.read_var_u32().unwrap();
             let mut internal_key = seek_key.read_bytes(internal_key_len as usize).unwrap();
             let seek_user_key = internal_key.read_bytes(internal_key.len() - 8).unwrap();
             if self
@@ -85,7 +88,7 @@ impl MemTable {
             {
                 let record_type = internal_key.read_u64_le().unwrap() & 0xff;
                 if record_type == ValueType::Value as u64 {
-                    let value_len = seek_key.read_var_u32().unwrap();
+                    let (value_len,_) = seek_key.read_var_u32().unwrap();
                     let user_value = seek_key.read_bytes(value_len as usize).unwrap();
                     return Ok(Some(user_value.into()));
                 } else if record_type == ValueType::Deletetion as u64 {
@@ -173,7 +176,7 @@ impl LookupKey {
     pub fn new(key: impl AsRef<[u8]>, seq: SequenceNumber, t: ValueType) -> Self {
         let key = key.as_ref();
         let key_size = key.len() + 8;
-        let size = key_size + key_size.required_space();
+        let size = key_size + codec::required_space(key_size as u64);
 
         let mut buf = Vec::with_capacity(size);
         buf.write_var_u32(key_size as u32).unwrap();
@@ -182,7 +185,7 @@ impl LookupKey {
 
         LookupKey {
             key: buf,
-            key_offset: key_size.required_space(),
+            key_offset: codec::required_space(key_size as u64),
         }
     }
 

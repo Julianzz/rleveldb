@@ -3,7 +3,7 @@ use std::{io::Read, ops::Deref};
 use snap::read::FrameDecoder;
 
 use crate::{
-    codec::{Decoder, VarInt},
+    codec::{self, NumberReader, VarIntReader, VarIntWriter},
     env::RandomAccessFile,
     error::{Error, Result},
     options::{Compress, ReadOption},
@@ -26,10 +26,10 @@ impl BlockHandle {
         BlockHandle { offset, size }
     }
 
-    pub fn from_raw(data: &[u8]) -> Option<Self> {
+    pub fn from_raw(data: &[u8]) -> Result<Self> {
         let mut handle = BlockHandle::default();
-        handle.decode(data);
-        Some(handle)
+        handle.decode(data)?;
+        Ok(handle)
     }
 
     pub fn size(&self) -> u64 {
@@ -46,19 +46,25 @@ impl BlockHandle {
     }
 
     pub fn encode(&self, dst: &mut [u8]) -> usize {
-        assert!(dst.len() >= self.offset.required_space() + self.size.required_space());
-
-        let offset = self.offset.encode_var(dst);
-        self.size.encode_var(&mut dst[offset..]) + offset
+        assert!(
+            dst.len()
+                >= codec::required_space(self.offset as u64)
+                    + codec::required_space(self.size as u64)
+        );
+        let mut dst = dst;
+        // let offset = self.offset.encode_var(dst);
+        // self.size.encode_var(&mut dst[offset..]) + offset
+        dst.write_var_u64(self.offset).unwrap() + dst.write_var_u64(self.size).unwrap()
     }
 
-    pub fn decode(&mut self, data: &[u8]) -> Option<usize> {
-        let (offset, offset_len) = u64::decode_var(data)?;
-        let (size, size_len) = u64::decode_var(&data[offset_len..])?;
+    pub fn decode(&mut self, data: &[u8]) -> Result<usize> {
+        let mut data = data;
+        let (offset, offset_len) = data.read_var_u64()?;
+        let (size, size_len) = data.read_var_u64()?;
         self.offset = offset;
         self.size = size;
 
-        Some(offset_len + size_len)
+        Ok(offset_len + size_len)
     }
 
     // pub fn decode_from(data: &[u8]) -> Option<(BlockHandle, usize)> {
@@ -97,14 +103,9 @@ impl Footer {
             return Err(Error::Corruption("not an sstable(bad magic number)".into()));
         }
 
-        let offset = self
-            .meta_index_handle
-            .decode(data)
-            .ok_or_else(|| Error::Corruption("wrong decode metaindex handle".into()))?;
-        let _ = self
-            .index_handle
-            .decode(&data[offset..])
-            .ok_or_else(|| Error::Corruption(("wrong decode block index handle").into()))?;
+        let offset = self.meta_index_handle.decode(data)?;
+        let _ = self.index_handle.decode(&data[offset..])?;
+        // .ok_or_else(|| Error::Corruption(("wrong decode block index handle").into()))?;
 
         Ok(())
     }
@@ -137,7 +138,9 @@ impl BlockContent {
 
         let data = buf.as_slice();
         if option.verify_checksum {
-            let (checksum, _) = data[n + 1..].decode_u32_le()?;
+            // let (checksum, _) = data[n + 1..].decode_u32_le()?;
+            // let checksum = u32::decode_fixed(&data[n + 1..]);
+            let checksum = (&data[n + 1..]).read_u32_le()?;
             let mut hasher = crc32fast::Hasher::new();
             hasher.update(&data[0..n + 1]);
             if checksum != hasher.finalize() {

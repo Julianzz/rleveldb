@@ -85,7 +85,7 @@ impl<R: RandomAccessFile> Table<R> {
             iter.seek(&key);
             if iter.valid() && comparator.compare(&key, iter.key()) == Ordering::Equal {
                 let mut handle = BlockHandle::default();
-                handle.decode(iter.value());
+                handle.decode(iter.value())?;
                 let filter_block_content =
                     BlockContent::read_block_from_file(file, &handle, &read_option)?;
                 return Ok(Some(filter_block_content));
@@ -99,10 +99,7 @@ impl<R: RandomAccessFile> Table<R> {
         read_option: &ReadOption,
         index_value: &[u8],
     ) -> Result<BlockIter> {
-        let block_handle = BlockHandle::from_raw(index_value)
-            .ok_or_else(|| Error::Corruption("decode block handle corruption".into()))?;
-        //TODO add cache
-
+        let block_handle = BlockHandle::from_raw(index_value)?;
         let block_content =
             BlockContent::read_block_from_file(&self.file, &block_handle, read_option)?;
         let block = Block::from_raw(block_content)?;
@@ -399,7 +396,11 @@ fn write_raw_block<W: WritableFile>(
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use crate::{cmp::BitWiseComparator, env::{RandomAccessFile, IoResult}, filter::BloomFilterPolicy};
+    use crate::{
+        cmp::BitWiseComparator,
+        env::{IoResult, RandomAccessFile},
+        filter::BloomFilterPolicy,
+    };
 
     use super::*;
     pub struct MemFs {
@@ -445,7 +446,7 @@ mod tests {
     #[test]
     fn test_build_table() {
         let mut datas: Vec<(String, String)> = Vec::new();
-        for i in 0..10000 {
+        for i in 0..20000 {
             let key = format!("liuzhenzhong{:06}", i);
             let value = format!("zhong:{:06}", i);
             datas.push((key, value));

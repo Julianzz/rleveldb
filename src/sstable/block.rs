@@ -1,7 +1,7 @@
 use super::format::BlockContent;
 use crate::{
     cmp::Comparator,
-    codec::{Decoder, NumberReader, VarintReader},
+    codec::{NumberReader, VarIntReader},
     error::{Error, Result},
     iterator::DBIterator,
     slice::UnsafeSlice,
@@ -23,7 +23,7 @@ impl Block {
                 "bad block contents, size too small".into(),
             ));
         }
-        let (num_restarts, _) = content[n - 4..].decode_u32_le().unwrap();
+        let num_restarts = (&content[n - 4..]).read_u32_le().unwrap();
         let max_restart_allowed = (n - RESTART_SIZE) / RESTART_SIZE;
         if num_restarts as usize > max_restart_allowed {
             Err(Error::Corruption("bac block contents".into()))
@@ -105,9 +105,9 @@ impl BlockIter {
             // Fast path: all three values are encoded in one byte each
             step = 3
         } else {
-            shared = data.read_var_u32()?;
-            non_shared = data.read_var_u32()?;
-            value_len = data.read_var_u32()?;
+            (shared, _) = data.read_var_u32()?;
+            (non_shared, _) = data.read_var_u32()?;
+            (value_len, _) = data.read_var_u32()?;
             step -= data.len();
         }
 
