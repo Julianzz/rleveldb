@@ -1,6 +1,6 @@
-use std::{fs, io::Read, path::Path};
-
 use regex::Regex;
+use std::fmt::Write;
+use std::{fs, io::Read, path::Path};
 
 use crate::error::Result;
 
@@ -53,14 +53,16 @@ impl TestData {
     }
 }
 
-pub fn run_test<F: Fn(&TestData) -> String>(path: impl AsRef<Path>, f: F) {
+pub fn run_test<F: FnMut(&TestData) -> String>(path: impl AsRef<Path>, f: F) {
     let path = path.as_ref();
     let mut file = fs::OpenOptions::new().read(true).open(path).unwrap();
     let mut content = String::new();
     file.read_to_string(&mut content).unwrap();
+
+    run_test_from_string(content, f);
 }
 
-pub fn run_test_from_string<F: Fn(&TestData) -> String>(input: impl AsRef<str>, f: F) {
+pub fn run_test_from_string<F: FnMut(&TestData) -> String>(input: impl AsRef<str>, mut f: F) {
     let input = input.as_ref();
     let datas = parse_test_data(input, "").unwrap();
     for data in datas.iter() {
@@ -119,8 +121,7 @@ pub fn parse_test_data(input: &str, source: &str) -> Result<Vec<TestData>> {
                         seperator = true;
                         break;
                     }
-                    buf.push_str(line);
-                    buf.push_str("\n");
+                    write!(&mut buf, "{}\n", line).unwrap();
                 } else {
                     break;
                 }
@@ -131,8 +132,10 @@ pub fn parse_test_data(input: &str, source: &str) -> Result<Vec<TestData>> {
                 loop {
                     if let Some((_, line)) = iter.next() {
                         let line = line.trim();
-                        buf.push_str(line);
-                        buf.push_str("\n");
+                        if line.is_empty() {
+                            break;
+                        }
+                        write!(&mut buf, "{}\n", line).unwrap();
                     } else {
                         break;
                     }
@@ -187,7 +190,15 @@ sentence
 Did the following: make sentence
 1 hungry monkey eats a 🍌
 while 12 other monkeys watch greedily
+
+make argTuple=(1, 🍌) argInt=12 argString=greedily argString=totally_ignored
+sentence
+----
+Did the following: make sentence
+1 hungry monkey eats a 🍌
+while 12 other monkeys watch greedily
 ";
+        let mut count = 0;
         run_test_from_string(input, |t| {
             assert_eq!(t.cmd, "make");
             assert_eq!(t.input, "sentence");
@@ -198,6 +209,9 @@ while 12 other monkeys watch greedily
             assert_eq!(arg_int.int64(0), 12);
             let arg_tuple = t.scan_args("argTuple");
             assert_eq!(arg_tuple.int64(0), 1);
+
+            count += 1;
+
             format!(
                 "Did the following: {} {}\n{} hungry monkey eats a {}\nwhile {} other monkeys watch {}\n",
                 t.cmd,
@@ -208,5 +222,7 @@ while 12 other monkeys watch greedily
                 arg_str.string(0)
             )
         });
+
+        assert_eq!(count, 2);
     }
 }
